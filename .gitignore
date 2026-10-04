@@ -1,0 +1,12 @@
+# entorno
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# modelos: se bajan con scripts/fetch_models.py (y el HF cache)
+models/
+
+# PRIVADO: audio y transcripciones de llamadas reales, salidas de pruebas
+out/
+logs/

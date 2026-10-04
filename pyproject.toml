@@ -1,0 +1,50 @@
+[project]
+name = "voztrad"
+version = "0.1.0"
+description = "Traductor de voz bidireccional local para llamadas (motor headless)"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "ctranslate2==4.8.2",
+    "faster-whisper==1.2.1",
+    "onnxruntime-gpu==1.29.0",  # build CUDA 12 (la de PyPI 1.30 es CUDA 13)
+    "numpy",
+    "soxr",
+    "soundfile",
+    "PyAudioWPatch==0.2.12.8; sys_platform == 'win32'",
+    "piper-tts==1.8.0",
+    "sentencepiece",
+    "huggingface_hub",
+    "onnx-asr[gpu,hub]==0.12.0",
+]
+
+[project.optional-dependencies]
+ui = [
+    "pyside6>=6.8",
+]
+
+[tool.uv]
+# piper-tts depende de "onnxruntime" (CPU), que pisa los archivos de onnxruntime-gpu.
+# El override con un marker que nunca se cumple hace que el resolver no lo instale.
+# NO PyTorch en ningún lado.
+override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voztrad"]
+
+# Builds de onnxruntime-gpu para CUDA 12 + cuDNN 9 (mismo stack que CTranslate2).
+[[tool.uv.index]]
+name = "ort-cuda12"
+url = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/"
+explicit = true
+
+[tool.uv.sources]
+onnxruntime-gpu = { index = "ort-cuda12" }
