@@ -89,8 +89,8 @@ class Engine:
             tr.translate("hola")
         self.tts = None
         if cfg.enable_b:
-            from .tts import Piper
-            self.tts = Piper(cfg.tts_voice)
+            from .tts import load_tts
+            self.tts = load_tts(cfg, lambda m: self._emit({"type": "status", "msg": m}))
         self._emit({"type": "status", "msg": f"modelos listos en {time.perf_counter() - t:.1f}s",
                     "asr": self.asr.name, "config": _cfg_dict(cfg)})
 
@@ -220,7 +220,8 @@ class Engine:
                     first = time.perf_counter()
                     seg.ts["tts_first"] = first - t0
                     self._finish(seg, first)  # la voz empieza a salir hacia Teams
-                self.player.play(chunk, self.tts.sr)
+                self.player.play(chunk, self.tts.sr, last=False)
+            self.player.play(np.zeros(0, np.float32), self.tts.sr, last=True)  # vacía el resampler
 
     # ---------------------------------------------------------- métricas
     def _finish(self, seg: Segment, t_out: float):
@@ -235,6 +236,7 @@ class Engine:
             "total": (t_out - seg.t_speech_end) * 1000,
         }
         ev = {"type": "phrase", "dir": seg.direction, "seq": seg.seq, "asr": self.asr.name,
+              "tts": getattr(self.tts, "name", None) if seg.direction == "B" else None,
               "gpu_warm": self.warmer is not None,
               "mode": (self.cfg.b_mode if seg.direction == "B" else "vad"),
               "audio_s": round(seg.dur_s, 2), "forced": seg.forced,
@@ -321,6 +323,7 @@ def _cfg_dict(cfg: Config) -> dict:
     from dataclasses import asdict
     d = asdict(cfg)
     d["tts_voice"] = str(cfg.tts_voice)
+    d["voice_ref"] = str(cfg.voice_ref) if cfg.voice_ref else None
     return d
 
 

@@ -29,9 +29,24 @@ def cmd_run(a):
     cfg = Config(asr=a.asr, b_mode=a.b_mode, ptt_key=a.ptt_key, mic=a.mic, loopback=a.loopback,
                  cable=a.cable, normalize_voseo=not a.no_norm, parakeet_quant=a.parakeet_quant,
                  enable_a=not a.no_a, enable_b=not a.no_b, port=a.port,
-                 gpu_warm=not a.no_gpu_warm)
+                 gpu_warm=not a.no_gpu_warm, tts=a.tts,
+                 voice_ref=Path(a.voice) if a.voice else None)
     cfg.seg.hangover_ms = a.hangover
     Engine(cfg, save_segments=a.save_segments).run()
+
+
+def cmd_voice(a):
+    from . import voice
+    from .engine import setup_console
+    setup_console()
+    if a.action == "use":
+        if not a.which:
+            sys.exit("uso: python -m voztrad voice use es|en|mix")
+        voice.use(a.which)
+    elif a.action == "preview":
+        voice.previews()
+    else:
+        voice.record(a.mic)
 
 
 def cmd_app(a):
@@ -161,6 +176,12 @@ def main():
     u.add_argument("--port", type=int, default=8765)
     u.set_defaults(fn=lambda a: sys.exit(__import__("voztrad.ui.overlay", fromlist=["main"]).main(port=a.port)))
 
+    v = sub.add_parser("voice", help="grabar tu voz para clonarla / elegir referencia")
+    v.add_argument("action", nargs="?", default="record", choices=["record", "use", "preview"])
+    v.add_argument("which", nargs="?", choices=["es", "en", "mix"])
+    v.add_argument("--mic", default=None)
+    v.set_defaults(fn=cmd_voice)
+
     b = sub.add_parser("bench", help="comparar backends de ASR sobre los mismos wav")
     b.add_argument("dirs", nargs="+")
     b.add_argument("--asr", default="whisper,parakeet")
@@ -193,6 +214,9 @@ def _run_args(r):
     r.add_argument("--save-segments", action="store_true", help="guardar cada segmento en out/segments/")
     r.add_argument("--port", type=int, default=8765)
     r.add_argument("--no-gpu-warm", action="store_true", help="no calentar la GPU durante la voz")
+    r.add_argument("--tts", choices=["pocket", "piper"], default="pocket",
+                   help="pocket = tu voz clonada (models/voice/me.wav); piper = voz genérica")
+    r.add_argument("--voice", default=None, help="wav de referencia para clonar (default models/voice/me.wav)")
 
 
 if __name__ == "__main__":

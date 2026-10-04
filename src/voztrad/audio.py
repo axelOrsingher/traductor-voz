@@ -7,6 +7,7 @@ glitches en el audio real de la llamada.
 from __future__ import annotations
 
 import queue
+import threading
 import time
 from dataclasses import dataclass
 
@@ -118,11 +119,33 @@ class CablePlayer:
                                output=True, output_device_index=device["index"],
                                frames_per_buffer=self.rate // 100)
 
-    def play(self, audio: np.ndarray, sr: int):
+        # La escritura bloquea al ritmo del audio: va en un hilo propio, así el TTS
+        # puede ir generando el próximo trozo mientras suena el actual (streaming).
+        self._q: queue.Queue = queue.Queue()
+        self._rs: soxr.ResampleStream | None = None
+        self._rs_sr = 0
+        threading.Thread(target=self._writer, name="cable-out", daemon=True).start()
+
+    def play(self, audio: np.ndarray, sr: int, last: bool = True):
+        """Encola audio. Trozos de una misma frase: last=False salvo el último, así el
+        resampleo es continuo entre trozos (sin clicks en los bordes)."""
+        audio = audio.astype(np.float32)
         if sr != self.rate:
-            audio = soxr.resample(audio, sr, self.rate)
-        audio = np.repeat(audio.astype(np.float32)[:, None], self.channels, axis=1)
-        self._stream.write(audio.tobytes())
+            if self._rs is None or self._rs_sr != sr:
+                self._rs, self._rs_sr = soxr.ResampleStream(sr, self.rate, 1, dtype="float32"), sr
+            audio = self._rs.resample_chunk(audio, last=last)
+            if last:
+                self._rs = None
+        if len(audio):
+            self._q.put(np.repeat(audio[:, None], self.channels, axis=1).tobytes())
+
+    def _writer(self):
+        while True:
+            data = self._q.get()
+            if data is None:
+                return
+            self._stream.write(data)
 
     def close(self):
+        self._q.put(None)
         self._stream.close()

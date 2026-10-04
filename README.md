@@ -28,7 +28,14 @@ Salida de consola del motor en `logs\engine-console.txt`, frases y latencias en 
 Overlay: arrastrar desde la barra superior (snap nativo de Windows), redimensionar desde la esquina,
 A−/A+ tamaño de letra, clic derecho = opciones (original, latencia, opacidad, limpiar). Angosto → se apila.
 
+**Tu voz clonada** (Kyutai Pocket TTS, ONNX en CPU, zero-shot): grabate una vez con
+`python -m voztrad voice` (guía: 20 s en castellano + 20 s en inglés, chequea nivel, genera y
+reproduce muestras). Queda en `models/voice/me.wav` (no se versiona). Sin grabación → Piper.
+`--tts piper` fuerza la voz genérica (~190 ms menos de latencia, medido).
+Uso permitido solo con tu propia voz / con consentimiento (licencia del modelo).
+
 ```powershell
+.venv\Scripts\python.exe -m voztrad voice                         # grabar tu voz y elegir referencia
 .venv\Scripts\python.exe -m voztrad app                           # motor + overlay
 .venv\Scripts\python.exe -m voztrad ui                            # solo overlay (motor ya corriendo)
 .venv\Scripts\python.exe -m voztrad run                           # motor headless; parakeet + PTT F8 por defecto

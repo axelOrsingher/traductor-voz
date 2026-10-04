@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = ROOT / "models"
 
+VOICE_REFS = [MODELS / "voice" / "me.wav", MODELS / "voice" / "preview_from_call.wav"]
+
 SR = 16000          # todo el pipeline interno trabaja a 16 kHz mono
 FRAME = 512         # Silero VAD v5+: EXACTAMENTE 512 muestras a 16 kHz
 FRAME_MS = FRAME * 1000 / SR  # 32 ms
@@ -38,7 +40,9 @@ class Config:
     mic: str | None = None                   # substring del nombre; None = default
     loopback: str | None = None              # substring; None = loopback de la salida default
     cable: str = "CABLE Input"               # salida hacia la que se escribe el TTS
-    tts_voice: Path = MODELS / "en_US-lessac-medium.onnx"
+    tts: str = "pocket"                      # pocket (tu voz clonada) | piper
+    tts_voice: Path = MODELS / "en_US-lessac-medium.onnx"   # voz Piper (fallback)
+    voice_ref: Path | None = None            # grabación de tu voz; None = primera de VOICE_REFS que exista
     a_queue_max: int = 2                     # backpressure de la dirección A
     host: str = "127.0.0.1"
     port: int = 8765                         # transporte JSON-lines hacia la UI
