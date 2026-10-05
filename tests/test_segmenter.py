@@ -70,3 +70,28 @@ def test_ptt_marca_inicio_y_fin():
         if (s := ptt.push(f, pressed, f.t_cb if not pressed else None)):
             segs.append(s)
     assert len(segs) == 1 and not segs[0].forced
+
+
+def test_interprete_corta_en_pausas_reales():
+    # voz real del usuario leyendo en castellano (pausas de 200-400 ms entre cláusulas)
+    import pytest
+
+    from voztrad.config import MODELS
+    ref = MODELS / "voice" / "me_es.wav"
+    if not ref.exists():
+        pytest.skip("sin grabación del usuario (models/ no se versiona)")
+    x, sr = sf.read(ref, dtype="float32")
+    x = soxr.resample(x, sr, SR).astype(np.float32)
+    normal, interp = Segmenter("B", SegmenterConfig()), Segmenter("B", SegmenterConfig())
+    interp.interp = True
+    n = [s for f in _frames(x) if (s := normal.push(f))]
+    i = [s for f in _frames(x) if (s := interp.push(f))]
+    assert len(i) > len(n)
+    assert any(s.partial for s in i)
+    assert all(s.dur_s >= 1.2 for s in i if s.partial)  # nunca fragmentos ridículamente cortos
+
+
+def test_interprete_apagado_no_cambia_nada():
+    x = _load("A_smoke.wav")
+    a, b = Segmenter("A", SegmenterConfig()), Segmenter("A", SegmenterConfig())
+    assert [s.dur_s for f in _frames(x) if (s := a.push(f))] == [s.dur_s for f in _frames(x) if (s := b.push(f))]

@@ -52,10 +52,12 @@ class ParakeetASR:
     def transcribe(self, audio: np.ndarray, lang: str) -> str:
         text = str(self.model.recognize(audio, sample_rate=SR)).strip()
         # Parakeet pega oraciones: "amor.¿estás" -> "amor. ¿estás"
-        return _GLUED.sub(r"\1 \2", text)
+        text = _GLUED.sub(r"\1 \2", text)
+        return _OPEN_SPACE.sub(r"\1", text)  # "¿ cómo" -> "¿cómo"
 
 
 _GLUED = __import__("re").compile(r"([.,;:?!])([¿¡A-Za-zÁÉÍÓÚÑáéíóúñ])")
+_OPEN_SPACE = __import__("re").compile(r"([¿¡])\s+")
 
 
 def load(kind: str, whisper_model: str = "large-v3-turbo", parakeet_quant: str | None = None) -> ASR:

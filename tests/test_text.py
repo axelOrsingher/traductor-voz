@@ -32,3 +32,8 @@ def test_voseo_y_lexico():
 def test_parakeet_puntuacion_pegada():
     assert _GLUED.sub(r"\1 \2", "Hola, amor.¿estás solo?") == "Hola, amor. ¿estás solo?"
     assert re.sub(_GLUED, r"\1 \2", "3.5") == "3.5"
+
+
+def test_parakeet_signo_de_apertura():
+    from voztrad.asr import _OPEN_SPACE
+    assert _OPEN_SPACE.sub(r"\1", "Hola, ¿ cómo andan? ¡ Dale!") == "Hola, ¿cómo andan? ¡Dale!"

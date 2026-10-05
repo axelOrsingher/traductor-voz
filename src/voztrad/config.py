@@ -26,6 +26,10 @@ class SegmenterConfig:
     overlap_ms: int = 200          # solape arrastrado tras un corte forzado
     preroll_frames: int = 10       # 320 ms volcados al entrar en SPEAKING
     keep_tail_ms: int = 96         # silencio final que se deja en el segmento
+    # Modo intérprete: además del hangover, una pausa corta cierra un FRAGMENTO si ya
+    # hubo suficiente voz. Así se traduce y se dice mientras seguís hablando.
+    soft_hangover_ms: int = 256
+    soft_min_speech_ms: int = 1200
 
 
 @dataclass
@@ -33,7 +37,7 @@ class Config:
     asr: str = "whisper"                     # whisper | parakeet
     whisper_model: str = "large-v3-turbo"
     parakeet_quant: str | None = None        # None (fp32) | "int8"
-    b_mode: str = "ptt"                      # ptt | vad
+    b_mode: str = "ptt"                      # ptt | vad | interp
     ptt_key: str = "F8"
     ptt_max_ms: int = 28000
     normalize_voseo: bool = True

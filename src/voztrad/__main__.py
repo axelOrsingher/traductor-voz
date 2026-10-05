@@ -202,7 +202,8 @@ def main():
 def _run_args(r):
     r.add_argument("--asr", choices=["whisper", "parakeet"], default="parakeet")
     r.add_argument("--parakeet-quant", choices=["int8"], default=None)
-    r.add_argument("--b-mode", choices=["ptt", "vad"], default="ptt")
+    r.add_argument("--b-mode", choices=["ptt", "vad", "interp"], default="ptt",
+                   help="ptt = mantener tecla; vad = manos libres; interp = manos libres que va traduciendo en las pausas")
     r.add_argument("--ptt-key", default="F8")
     r.add_argument("--hangover", type=int, default=500, help="ms de silencio para cerrar frase")
     r.add_argument("--mic", default=None)

@@ -344,17 +344,22 @@ class Overlay(QWidget):
             self.mode_btn.hide()
             return
         self.mode_btn.show()
-        self.mode_btn.setText(f"PTT · {key}" if mode == "ptt" else "MANOS LIBRES")
-        self.mode_btn.setToolTip("Cambiar entre push-to-talk y manos libres")
+        label, hint = {
+            "ptt": (f"PTT · {key}", f"→ inglés · mantené {key} para hablar"),
+            "vad": ("MANOS LIBRES", "→ inglés · traduce cuando terminás la frase"),
+            "interp": ("INTÉRPRETE", "→ inglés · va traduciendo en cada pausa"),
+        }.get(mode, (mode, ""))
+        self.mode_btn.setText(label)
+        self.mode_btn.setToolTip("Cambiar modo: push-to-talk → manos libres → intérprete
+"
+                                 "(manos libres / intérprete: usá auriculares)")
         self.mode_btn.setStyleSheet(_qss_btn(ME))
-        if mode == "ptt":
-            self.me.hint.setText(f"→ inglés · mantené {key} para hablar")
-        else:
-            self.me.hint.setText("→ inglés · manos libres")
+        self.me.hint.setText(hint)
 
     def toggle_mode(self):
-        new = "vad" if self.state.get("b_mode") == "ptt" else "ptt"
-        self.send({"cmd": "b_mode", "value": new})
+        order = ["ptt", "vad", "interp"]
+        cur = self.state.get("b_mode", "ptt")
+        self.send({"cmd": "b_mode", "value": order[(order.index(cur) + 1) % 3 if cur in order else 0]})
 
     def set_scale(self, s: float):
         self.scale = round(min(2.0, max(0.7, s)), 2)

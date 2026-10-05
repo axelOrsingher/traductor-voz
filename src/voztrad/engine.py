@@ -146,6 +146,7 @@ class Engine:
                     seg = ptt.push(f, self.ptt.pressed, self.ptt.t_release)
                     talking = self.ptt.pressed
                 else:
+                    seg_vad.interp = d == "B" and self.cfg.b_mode == "interp"
                     seg = seg_vad.push(f)
                     talking = seg_vad.speaking
                 if talking and self.warmer:
@@ -239,7 +240,7 @@ class Engine:
               "tts": getattr(self.tts, "name", None) if seg.direction == "B" else None,
               "gpu_warm": self.warmer is not None,
               "mode": (self.cfg.b_mode if seg.direction == "B" else "vad"),
-              "audio_s": round(seg.dur_s, 2), "forced": seg.forced,
+              "audio_s": round(seg.dur_s, 2), "forced": seg.forced, "partial": seg.partial,
               "src": ts["text"], "tgt": ts["translation"], "norm": ts.get("normalized"),
               "lang": ts.get("lang"), "passthrough": ts.get("passthrough", False),
               "lat": {k: (round(v, 1) if v is not None else None) for k, v in lat.items()}}
@@ -269,7 +270,7 @@ class Engine:
         c = cmd["cmd"]
         if c == "ptt" and self.cfg.enable_b:
             self.ptt.set_pressed(bool(cmd["down"]))
-        elif c == "b_mode" and cmd["value"] in ("ptt", "vad"):
+        elif c == "b_mode" and cmd["value"] in ("ptt", "vad", "interp"):
             self.cfg.b_mode = cmd["value"]
             self._emit({"type": "status", "msg": f"B en modo {self.cfg.b_mode}"})
             self._emit(self.state(), quiet=True)

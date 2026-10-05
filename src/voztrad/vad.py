@@ -48,6 +48,7 @@ class Segment:
     t_emit: float             # cuando el segmentador lo entregó
     capture_ms: float         # demora cola+resample del último frame
     forced: bool = False      # cortado por max_segment_ms
+    partial: bool = False     # fragmento del modo intérprete (cortado en una pausa corta)
     seq: int = field(default_factory=lambda: next(_seq))
     ts: dict = field(default_factory=dict)  # tiempos de las etapas siguientes
 
@@ -68,6 +69,9 @@ class Segmenter:
         self.overlap_frames = math.ceil(cfg.overlap_ms / FRAME_MS)
         self.tail_frames = math.ceil(cfg.keep_tail_ms / FRAME_MS)
         self.min_frames = math.ceil(cfg.min_speech_ms / FRAME_MS)
+        self.soft_hang_frames = math.ceil(cfg.soft_hangover_ms / FRAME_MS)
+        self.soft_min_frames = math.ceil(cfg.soft_min_speech_ms / FRAME_MS)
+        self.interp = False  # modo intérprete: cortar fragmentos en pausas cortas
         self._reset()
 
     def _reset(self):
@@ -100,10 +104,14 @@ class Segmenter:
             self.voiced += 1
             self.last_voiced = f
 
-        if self.silence >= self.hang_frames:
+        soft_cut = (self.interp and self.silence >= self.soft_hang_frames
+                    and self.voiced >= self.soft_min_frames)
+        if self.silence >= self.hang_frames or soft_cut:
             keep = len(self.frames) - self.silence + self.tail_frames
             long_enough = self.voiced >= self.min_frames
             seg = self._make(self.frames[:keep], forced=False) if long_enough else None
+            if seg is not None:
+                seg.partial = soft_cut and self.silence < self.hang_frames
             self._reset()
             return seg
 
