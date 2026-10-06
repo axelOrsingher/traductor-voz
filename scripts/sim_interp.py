@@ -43,9 +43,15 @@ mt.translate("hola")
 tts = load_tts(Config())
 
 
-def segments(interp: bool):
+from voztrad.smartturn import SmartTurn  # noqa: E402
+
+smart_turn = SmartTurn()
+
+
+def segments(interp: bool, smart: bool = False):
     seg = Segmenter("B", SegmenterConfig())
     seg.interp = interp
+    seg.turn = smart_turn if smart else None
     x48 = np.repeat(soxr.resample(x, SR, 48000).astype(np.float32)[:, None], 2, axis=1)
     fr = Framer(48000, 2)
     out, n, start = [], 0, None
@@ -59,8 +65,10 @@ def segments(interp: bool):
     return start, out
 
 
-for mode, tempo in (("vad", False), ("interp", False), ("interp", True)):
-    speech_start, segs = segments(mode == "interp")
+for mode, tempo, smart in (("vad", False, False), ("vad", False, True), ("interp", True, False),
+                           ("interp", True, True)):
+    speech_start, segs = segments(mode == "interp", smart)
+    mode = mode + (" + SMART TURN" if smart else "")
     free_at = 0.0       # pipeline (ASR->MT->TTS) libre
     play_end = 0.0      # fin de lo que ya está sonando
     rows = []

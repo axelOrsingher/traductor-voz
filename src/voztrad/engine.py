@@ -10,6 +10,7 @@ Hilos:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import sys
@@ -230,6 +231,10 @@ class Engine:
             self._emit({"type": "drop", "dir": "A", "seq": dropped.seq,
                         "msg": "backpressure: segmento A viejo descartado"})
 
+    def _gpu(self):
+        """Envolver todo trabajo real de GPU: el calentador se pausa mientras tanto."""
+        return self.warmer.paused() if self.warmer else contextlib.nullcontext()
+
     def _partial(self):
         """Subtítulo provisorio de lo que se está diciendo. Solo con la GPU libre: los finales
         siempre van primero, y si hay uno esperando el parcial se descarta."""
@@ -239,14 +244,16 @@ class Engine:
         if audio is None or len(self.asr_q):
             return
         src, tgt = LANG[d]
-        text = self.asr.transcribe(audio, src)
+        with self._gpu():
+            text = self.asr.transcribe(audio, src)
         if not text or len(self.asr_q):
             return
         lang = detect(text)
         if lang not in (None, "es", "en"):
             return
-        tr = text if lang == tgt else self.mt[(src, tgt)].translate(
-            normalize(text) if (src == "es" and self.cfg.normalize_voseo) else text)
+        with self._gpu():
+            tr = text if lang == tgt else self.mt[(src, tgt)].translate(
+                normalize(text) if (src == "es" and self.cfg.normalize_voseo) else text)
         self._emit({"type": "partial", "dir": d, "src": text, "tgt": tr}, quiet=True)
 
     def _asr_loop(self):
@@ -259,15 +266,10 @@ class Engine:
             with self._partial_lock:  # ya llegó el final: el parcial de esa dirección sobra
                 self._partials.pop(seg.direction, None)
             src, _ = LANG[seg.direction]
-            if self.warmer:
-                self.warmer.pause()
             seg.ts["asr_start"] = time.perf_counter()
-            try:
+            with self._gpu():
                 text = self.asr.transcribe(seg.audio, src)
-            finally:
-                seg.ts["asr_end"] = time.perf_counter()
-                if self.warmer:
-                    self.warmer.resume()
+            seg.ts["asr_end"] = time.perf_counter()
             if not text:
                 continue
             seg.ts["text"] = text
@@ -292,7 +294,8 @@ class Engine:
                 seg.ts["passthrough"] = True
             else:
                 mt_in = normalize(text) if (src == "es" and self.cfg.normalize_voseo) else text
-                seg.ts["translation"] = self.mt[(src, tgt)].translate(mt_in)
+                with self._gpu():
+                    seg.ts["translation"] = self.mt[(src, tgt)].translate(mt_in)
                 if mt_in != text:
                     seg.ts["normalized"] = mt_in
             seg.ts["mt_end"] = time.perf_counter()

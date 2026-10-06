@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 
 import numpy as np
 import onnxruntime as ort
@@ -36,7 +37,9 @@ class GpuWarmer:
         self.sess.run(None, self.inp)
         self.hold_s = hold_s
         self._until = 0.0
-        self._busy = threading.Event()  # ASR corriendo
+        # trabajos reales de GPU en curso (ASR, MT, parciales): contador, pueden superponerse
+        self._busy = 0
+        self._busy_lock = threading.Lock()
         self._wake = threading.Event()
         self.calls = 0
         threading.Thread(target=self._run, name="gpuwarm", daemon=True).start()
@@ -47,17 +50,28 @@ class GpuWarmer:
         self._wake.set()
 
     def pause(self):
-        self._busy.set()
+        with self._busy_lock:
+            self._busy += 1
 
     def resume(self):
-        self._busy.clear()
+        with self._busy_lock:
+            self._busy = max(0, self._busy - 1)
+
+    @contextmanager
+    def paused(self):
+        """Mientras corre un trabajo real de GPU, el calentador no compite."""
+        self.pause()
+        try:
+            yield
+        finally:
+            self.resume()
 
     def _run(self):
         while True:
             self._wake.wait()
             self._wake.clear()
             while time.perf_counter() < self._until:
-                if self._busy.is_set():
+                if self._busy:
                     time.sleep(0.005)
                     continue
                 self.sess.run(None, self.inp)
