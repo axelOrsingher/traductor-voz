@@ -25,7 +25,7 @@ import soundfile as sf
 
 from . import asr as asr_mod
 from .audio import CablePlayer, Capture, Framer, find_input, find_loopback, find_output
-from .config import ROOT, SR, Config
+from .config import FRAME_MS, ROOT, SR, Config
 from .langid import detect
 from .tempo import Wsola, rate_for_backlog
 from .mt import Translator
@@ -35,6 +35,8 @@ from .voseo import normalize
 
 LANG = {"A": ("en", "es"), "B": ("es", "en")}
 STAGES = ["capture", "vad", "asr_wait", "asr", "mt", "tts", "total"]
+PARTIAL_EVERY_S = 0.7    # subtítulo en vivo cada 0,7 s de habla
+PARTIAL_MIN_MS = 1000    # recién después de 1 s (antes no hay nada que leer)
 
 
 class DualQueue:
@@ -58,11 +60,17 @@ class DualQueue:
             self.cv.notify()
         return dropped
 
-    def get(self):
+    def get(self, timeout: float | None = None):
         with self.cv:
-            while not (self.a or self.b):
-                self.cv.wait()
+            if not (self.a or self.b):
+                self.cv.wait_for(lambda: self.a or self.b, timeout)
+            if not (self.a or self.b):
+                return None
             return self.b.popleft() if self.b else self.a.popleft()
+
+    def __len__(self):
+        with self.cv:
+            return len(self.a) + len(self.b)
 
 
 class Engine:
@@ -96,6 +104,12 @@ class Engine:
         self._emit({"type": "status", "msg": f"modelos listos en {time.perf_counter() - t:.1f}s",
                     "asr": self.asr.name, "config": _cfg_dict(cfg)})
 
+        self.smart_turn = None
+        if cfg.smart_turn:
+            from .smartturn import SmartTurn
+            self.smart_turn = SmartTurn()
+        self._partials: dict[str, np.ndarray] = {}
+        self._partial_lock = threading.Lock()
         self.asr_q = DualQueue(cfg.a_queue_max)
         self.mt_q = DualQueue(None)
         self.tts_q = DualQueue(None)
@@ -168,8 +182,10 @@ class Engine:
         cap = self.caps[d]
         framer = Framer(cap.rate, cap.channels)
         seg_vad = Segmenter(d, self.cfg.seg)
+        seg_vad.turn = self.smart_turn
         ptt = PushToTalk(d, self.cfg.ptt_max_ms, self.cfg.seg.preroll_frames) if d == "B" else None
         active = False
+        last_partial = 0.0
         while not self.stop.is_set():
             t_cb, data = cap.q.get()
             for f in framer.push(t_cb, data):
@@ -192,6 +208,19 @@ class Engine:
                     self._emit({"type": "voice", "dir": d, "active": active}, quiet=True)
                 if seg is not None:
                     self._on_segment(seg)
+                # subtítulos en vivo: re-transcribir lo que va diciendo cada PARTIAL_EVERY_S
+                if self.cfg.partials and talking:
+                    ptt_mode = ptt is not None and self.cfg.b_mode == "ptt"
+                    live = ptt.frames if ptt_mode else seg_vad.frames
+                    quiet = 0 if ptt_mode else seg_vad.silence  # ya hay silencio: viene el final
+                    now = time.perf_counter()
+                    if (live and quiet == 0 and len(live) * FRAME_MS >= PARTIAL_MIN_MS
+                            and now - last_partial >= PARTIAL_EVERY_S):
+                        last_partial = now
+                        with self._partial_lock:
+                            self._partials[d] = np.concatenate([fr.samples for fr in live])
+                elif not talking:
+                    last_partial = 0.0
 
     def _on_segment(self, seg: Segment):
         if self.seg_dir:
@@ -201,9 +230,34 @@ class Engine:
             self._emit({"type": "drop", "dir": "A", "seq": dropped.seq,
                         "msg": "backpressure: segmento A viejo descartado"})
 
+    def _partial(self):
+        """Subtítulo provisorio de lo que se está diciendo. Solo con la GPU libre: los finales
+        siempre van primero, y si hay uno esperando el parcial se descarta."""
+        with self._partial_lock:
+            d = "B" if "B" in self._partials else ("A" if "A" in self._partials else None)
+            audio = self._partials.pop(d) if d else None
+        if audio is None or len(self.asr_q):
+            return
+        src, tgt = LANG[d]
+        text = self.asr.transcribe(audio, src)
+        if not text or len(self.asr_q):
+            return
+        lang = detect(text)
+        if lang not in (None, "es", "en"):
+            return
+        tr = text if lang == tgt else self.mt[(src, tgt)].translate(
+            normalize(text) if (src == "es" and self.cfg.normalize_voseo) else text)
+        self._emit({"type": "partial", "dir": d, "src": text, "tgt": tr}, quiet=True)
+
     def _asr_loop(self):
         while True:
-            seg: Segment = self.asr_q.get()
+            seg: Segment = self.asr_q.get(timeout=0.05)
+            if seg is None:
+                if self.cfg.partials:
+                    self._partial()
+                continue
+            with self._partial_lock:  # ya llegó el final: el parcial de esa dirección sobra
+                self._partials.pop(seg.direction, None)
             src, _ = LANG[seg.direction]
             if self.warmer:
                 self.warmer.pause()
@@ -320,6 +374,7 @@ class Engine:
               "src": ts["text"], "tgt": ts["translation"], "norm": ts.get("normalized"),
               "lang": ts.get("lang"), "passthrough": ts.get("passthrough", False),
               "tempo": ts.get("tempo"), "backlog_s": ts.get("backlog_s"),
+              "end": seg.end_reason, "turn_p": None if seg.turn_prob is None else round(seg.turn_prob, 3),
               "lat": {k: (round(v, 1) if v is not None else None) for k, v in lat.items()}}
         self.results.append(ev)
         self._emit(ev)

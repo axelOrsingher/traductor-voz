@@ -95,3 +95,38 @@ def test_interprete_apagado_no_cambia_nada():
     x = _load("A_smoke.wav")
     a, b = Segmenter("A", SegmenterConfig()), Segmenter("A", SegmenterConfig())
     assert [s.dur_s for f in _frames(x) if (s := a.push(f))] == [s.dur_s for f in _frames(x) if (s := b.push(f))]
+
+
+def _first_emit_frame(seg, x):
+    for i, f in enumerate(_frames(x)):
+        if (s := seg.push(f)) is not None:
+            return i, s
+    return None, None
+
+
+def test_smart_turn_cierra_antes_si_la_frase_termino():
+    x = _load("A_en02.wav")
+    base_i, _ = _first_emit_frame(Segmenter("A", SegmenterConfig()), x)
+    smart = Segmenter("A", SegmenterConfig())
+    smart.turn = lambda audio: 0.95  # "terminó"
+    i, s = _first_emit_frame(smart, x)
+    assert s.end_reason == "smart" and s.turn_prob == 0.95
+    # 500 ms de hangover vs 200 ms de Smart Turn: ~9 frames de 32 ms antes
+    assert base_i - i >= 8
+
+
+def test_smart_turn_espera_si_la_frase_no_termino():
+    x = _load("A_en02.wav")
+    base_i, _ = _first_emit_frame(Segmenter("A", SegmenterConfig()), x)
+    smart = Segmenter("A", SegmenterConfig())
+    smart.turn = lambda audio: 0.1   # "no terminó": no corta antes del hangover
+    i, s = _first_emit_frame(smart, x)
+    assert i == base_i and s.end_reason == "hangover"
+
+
+def test_smart_turn_real_en_frase_completa():
+    from voztrad.smartturn import SmartTurn
+    smart = Segmenter("A", SegmenterConfig())
+    smart.turn = SmartTurn()
+    _, s = _first_emit_frame(smart, _load("A_en02.wav"))
+    assert s.end_reason == "smart" and s.turn_prob > 0.5

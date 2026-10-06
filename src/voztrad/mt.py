@@ -1,4 +1,8 @@
-"""Traducción automática: opus-mt (Marian) vía CTranslate2, int8 en CPU."""
+"""Traducción automática: opus-mt (Marian) vía CTranslate2.
+
+En GPU (int8_float16) por defecto: en CPU compite con Teams y el TTS. Medido con la CPU
+cargada: CPU int8 p50 5,5 s (!) vs GPU 90 ms; libre: 38 vs 33 ms. ~150 MB de VRAM por modelo.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,9 @@ import os
 import re
 from pathlib import Path
 
-import ctranslate2
+from . import cuda_dlls  # noqa: F401  (antes que ctranslate2)
+
+import ctranslate2  # noqa: E402
 import sentencepiece as spm
 from huggingface_hub import snapshot_download
 
@@ -18,12 +24,19 @@ REPOS = {
 
 
 class Translator:
-    def __init__(self, src: str, tgt: str, device: str = "cpu", compute_type: str = "int8",
-                 threads: int | None = None):
+    def __init__(self, src: str, tgt: str, device: str = "auto", threads: int | None = None):
         path = Path(snapshot_download(REPOS[(src, tgt)]))
-        self.model = ctranslate2.Translator(
-            str(path), device=device, compute_type=compute_type,
-            inter_threads=1, intra_threads=threads or min(4, os.cpu_count() or 4))
+        if device == "auto":
+            device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        try:
+            self.model = ctranslate2.Translator(
+                str(path), device=device, compute_type="int8_float16" if device == "cuda" else "int8",
+                inter_threads=1, intra_threads=threads or min(4, os.cpu_count() or 4))
+        except RuntimeError:  # sin CUDA utilizable: CPU
+            device = "cpu"
+            self.model = ctranslate2.Translator(str(path), device="cpu", compute_type="int8",
+                                                inter_threads=1, intra_threads=threads or 4)
+        self.device = device
         self.sp_src = spm.SentencePieceProcessor(model_file=str(path / "source.spm"))
         self.sp_tgt = spm.SentencePieceProcessor(model_file=str(path / "target.spm"))
 

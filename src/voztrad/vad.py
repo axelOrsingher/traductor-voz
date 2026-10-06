@@ -49,6 +49,8 @@ class Segment:
     capture_ms: float         # demora cola+resample del último frame
     forced: bool = False      # cortado por max_segment_ms
     partial: bool = False     # fragmento del modo intérprete (cortado en una pausa corta)
+    turn_prob: float | None = None   # Smart Turn en la última pausa evaluada
+    end_reason: str = "hangover"     # smart | soft | hangover | ptt | max
     seq: int = field(default_factory=lambda: next(_seq))
     ts: dict = field(default_factory=dict)  # tiempos de las etapas siguientes
 
@@ -72,6 +74,11 @@ class Segmenter:
         self.soft_hang_frames = math.ceil(cfg.soft_hangover_ms / FRAME_MS)
         self.soft_min_frames = math.ceil(cfg.soft_min_speech_ms / FRAME_MS)
         self.interp = False  # modo intérprete: cortar fragmentos en pausas cortas
+        # Smart Turn (callable audio -> prob de "frase completa"); None = solo silencio
+        self.turn = None
+        self.turn_frames = math.ceil(cfg.turn_silence_ms / FRAME_MS)
+        self.soft_hang_smart_frames = math.ceil(cfg.soft_hangover_smart_ms / FRAME_MS)
+        self.last_turn_prob: float | None = None
         self._reset()
 
     def _reset(self):
@@ -81,6 +88,7 @@ class Segmenter:
         self.frames: list[Frame] = []
         self.voiced = 0
         self.last_voiced: Frame | None = None
+        self.last_turn_prob = None
 
     def push(self, f: Frame) -> Segment | None:
         p = self.vad(f.samples)
@@ -104,14 +112,24 @@ class Segmenter:
             self.voiced += 1
             self.last_voiced = f
 
-        soft_cut = (self.interp and self.silence >= self.soft_hang_frames
-                    and self.voiced >= self.soft_min_frames)
-        if self.silence >= self.hang_frames or soft_cut:
+        # Fin de turno inteligente: a los turn_silence_ms se le pregunta a Smart Turn si la
+        # frase está completa (una vez por pausa). Si sí, se cierra ahí sin esperar el hangover.
+        smart_cut = False
+        if (self.turn is not None and self.silence == self.turn_frames
+                and self.voiced >= self.min_frames):
+            keep = len(self.frames) - self.silence + self.turn_frames
+            self.last_turn_prob = self.turn(np.concatenate([fr.samples for fr in self.frames[:keep]]))
+            smart_cut = self.last_turn_prob > self.cfg.turn_threshold
+        soft_hang = self.soft_hang_smart_frames if self.turn is not None else self.soft_hang_frames
+        soft_cut = (self.interp and self.silence >= soft_hang and self.voiced >= self.soft_min_frames)
+        if self.silence >= self.hang_frames or soft_cut or smart_cut:
             keep = len(self.frames) - self.silence + self.tail_frames
             long_enough = self.voiced >= self.min_frames
             seg = self._make(self.frames[:keep], forced=False) if long_enough else None
             if seg is not None:
-                seg.partial = soft_cut and self.silence < self.hang_frames
+                seg.partial = soft_cut and not smart_cut and self.silence < self.hang_frames
+                seg.turn_prob = self.last_turn_prob
+                seg.end_reason = ("smart" if smart_cut else "soft" if seg.partial else "hangover")
             self._reset()
             return seg
 

@@ -27,6 +27,7 @@ EVENTS = [
     {"type": "phrase", "dir": "A", "src": "The latency numbers look much better after the last deploy.",
      "tgt": "Los números de latencia se ven mucho mejor después del último despliegue.", "lat": {"total": 812}},
     {"type": "voice", "dir": "A", "active": True},
+    {"type": "partial", "dir": "A", "src": "So the plan for next week is", "tgt": "Así que el plan para la semana que viene es"},
     {"type": "ptt", "down": True},
 ]
 

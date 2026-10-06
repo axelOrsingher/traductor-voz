@@ -130,6 +130,8 @@ pa.terminate()
 
 ph = [e for e in all_events if e.get("type") == "phrase" and e["dir"] == "A"]
 ls = [e for e in all_events if e.get("type") == "listen"]
+pa_ = [e for e in all_events if e.get("type") == "partial"]
+print(f"parciales en vivo: {len(pa_)}", [p["tgt"][:40] for p in pa_[:4]])
 print(f"\nfrases A: {len(ph)} (se reprodujeron {len(wavs) * args.rounds}); "
       f"en castellano re-capturadas (eco): {sum(e.get('passthrough') for e in ph)}")
 for name, ms, vmin, vend in results:

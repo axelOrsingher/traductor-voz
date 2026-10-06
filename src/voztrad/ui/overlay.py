@@ -131,6 +131,13 @@ class Column(QWidget):
         self.list.setContentsMargins(0, 0, 4, 0)
         self.list.setSpacing(6)
         self.list.addStretch()  # las frases se apilan desde abajo, como subtítulos
+        # subtítulo en vivo: lo que se está diciendo, provisorio, hasta que llega la frase final
+        self.partial = QLabel("")
+        self.partial.setWordWrap(True)
+        self.partial.hide()
+        self.list.addWidget(self.partial)
+        self._partial_clear = QTimer(self, singleShot=True, interval=3000,
+                                     timeout=lambda: self.set_partial(None))
         self.typing = QLabel("")
         self.typing.setStyleSheet(f"color:{accent};font:700 20px '{FONT}';padding-left:14px;")
         self.typing.hide()
@@ -154,7 +161,8 @@ class Column(QWidget):
         bar = self.scroll.verticalScrollBar()
         at_bottom = bar.value() >= bar.maximum() - 30
         card = Card(ev, self.accent, scale, show_src, show_lat)
-        self.list.insertWidget(self.list.count() - 1, card)  # antes del indicador "…"
+        self.set_partial(None)
+        self.list.insertWidget(self.list.count() - 2, card)  # antes del parcial y del "…"
         self.cards.append(card)
         while len(self.cards) > MAX_CARDS:
             old = self.cards.pop(0)
@@ -181,6 +189,25 @@ class Column(QWidget):
         else:
             self._timer.stop()
             self.typing.hide()
+
+    def set_partial(self, text: str | None, scale: float = 1.0):
+        self._partial_clear.stop()
+        if not text:
+            self.partial.hide()
+            return
+        c = QColor(TEXT)
+        c.setAlphaF(0.75)
+        self.partial.setText(text)
+        self.partial.setStyleSheet(f"color:{c.name(QColor.HexArgb)};font:italic 500 {round(19 * scale)}px "
+                                   f"'{FONT}';padding:4px 10px 0 15px;")
+        self.partial.show()
+        bar = self.scroll.verticalScrollBar()
+        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+
+    def expire_partial(self):
+        """Si no llega la frase final (p.ej. la descartó el VAD), el parcial se va solo."""
+        if self.partial.isVisible():
+            self._partial_clear.start()
 
     def _tick(self):
         self._dots = (self._dots + 1) % 4
@@ -314,6 +341,11 @@ class Overlay(QWidget):
             if ev["dir"] == "B" and self.state.get("b_mode") == "ptt":
                 return  # en PTT el indicador lo maneja el evento "ptt"
             col.set_active(ev["active"], "hablan…" if ev["dir"] == "A" else "hablás…")
+            if not ev["active"]:
+                col.expire_partial()
+        elif t == "partial":
+            col = self.them if ev["dir"] == "A" else self.me
+            col.set_partial(ev["tgt"], self.scale)
         elif t == "ptt":
             self.state["ptt"] = ev["down"]
             self.me.set_active(ev["down"], "TRANSMITIENDO", LIVE)

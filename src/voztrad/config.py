@@ -30,6 +30,11 @@ class SegmenterConfig:
     # hubo suficiente voz. Así se traduce y se dice mientras seguís hablando.
     soft_hangover_ms: int = 256
     soft_min_speech_ms: int = 1200
+    # Smart Turn: a los turn_silence_ms se decide si la frase terminó (prob > turn_threshold).
+    # Con Smart Turn, el corte suave del intérprete (frase incompleta) espera más: 400 ms.
+    turn_silence_ms: int = 200
+    turn_threshold: float = 0.5
+    soft_hangover_smart_ms: int = 400
 
 
 @dataclass
@@ -47,6 +52,8 @@ class Config:
     tts: str = "pocket"                      # pocket (tu voz clonada) | piper
     tts_voice: Path = MODELS / "en_US-lessac-medium.onnx"   # voz Piper (fallback)
     voice_ref: Path | None = None            # grabación de tu voz; None = primera de VOICE_REFS que exista
+    partials: bool = True                    # subtítulos en vivo mientras alguien habla
+    smart_turn: bool = True                  # fin de turno con Smart Turn v3.2 (ver smartturn.py)
     # Escuchar a los otros traducidos al castellano (en tus auriculares), con Teams bajito de fondo
     listen: bool = True
     listen_voice: Path = MODELS / "es_MX-ald-medium.onnx"   # 90 ms al primer audio (daniela-high: 316)
