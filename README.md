@@ -28,6 +28,13 @@ Salida de consola del motor en `logs\engine-console.txt`, frases y latencias en 
 Overlay: arrastrar desde la barra superior (snap nativo de Windows), redimensionar desde la esquina,
 A−/A+ tamaño de letra, clic derecho = opciones (original, latencia, opacidad, limpiar). Angosto → se apila.
 
+**Escuchar a los otros en castellano** (🔊 ESCUCHAR ES en el overlay, activado por defecto):
+lo que dicen en inglés se dice en castellano por tus auriculares (~0,8 s después de cada frase,
+medido) con Teams bajado al 35% mientras suena. La dirección A captura todo el audio del sistema
+**menos el de voztrad** (process loopback EXCLUDE), así la traducción no se re-captura.
+En manos libres/intérprete el mic se ignora mientras suena la traducción (por si usás parlantes).
+`--no-listen` lo apaga; `--listen-voice models\es_AR-daniela-high.onnx` = voz rioplatense (más lenta).
+
 **Tu voz clonada** (Kyutai Pocket TTS, ONNX en CPU, zero-shot): grabate una vez con
 `python -m voztrad voice` (guía: 20 s en castellano + 20 s en inglés, chequea nivel, genera y
 reproduce muestras). Queda en `models/voice/me.wav` (no se versiona). Sin grabación → Piper.

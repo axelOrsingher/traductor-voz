@@ -11,6 +11,7 @@ Hilos:
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import threading
 import time
@@ -101,8 +102,21 @@ class Engine:
 
         self.pa = pyaudio.PyAudio()
         self.caps: dict[str, Capture] = {}
+        self.listen_ok = False
         if cfg.enable_a:
-            self.caps["A"] = Capture(self.pa, find_loopback(self.pa, cfg.loopback))
+            self.caps["A"] = self._open_a_capture()
+            if cfg.listen and self.listen_ok:
+                from .ducker import Ducker
+                from .tts import Piper
+                self.listen_tts = Piper(cfg.listen_voice)
+                api = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+                self.listen_player = CablePlayer(self.pa, self.pa.get_device_info_by_index(api["defaultOutputDevice"]))
+                self.ducker = Ducker(cfg.duck_apps, cfg.listen_duck)
+                self.listen_q: queue.Queue = queue.Queue()
+                self.listen_results: list[float] = []
+                self._listen_until = 0.0
+                self._emit({"type": "status", "msg": f"escucha en castellano -> {self.listen_player.device['name']}"
+                            f" (Teams al {round(cfg.listen_duck * 100)}% mientras suena)"})
         if cfg.enable_b:
             self.caps["B"] = Capture(self.pa, find_input(self.pa, cfg.mic))
             self.player = CablePlayer(self.pa, find_output(self.pa, cfg.cable))
@@ -115,12 +129,28 @@ class Engine:
             self._emit({"type": "status", "msg": f"B -> {self.player.device['name']} | modo {cfg.b_mode}"
                         + (f" (tecla {cfg.ptt_key})" if cfg.b_mode == "ptt" else "")})
 
+    def _open_a_capture(self):
+        """Loopback de todo el sistema EXCEPTO este proceso: así la traducción al castellano que
+        suena en los auriculares no vuelve a entrar por la dirección A."""
+        if self.cfg.loopback is None:
+            try:
+                from .procloop import ProcessLoopbackCapture
+                cap = ProcessLoopbackCapture()
+                self.listen_ok = True
+                return cap
+            except Exception as e:  # noqa: BLE001 — Windows viejo o API no disponible
+                self._emit({"type": "status", "msg": f"process loopback no disponible ({e}); "
+                            "uso loopback común y desactivo la escucha en castellano"})
+        return Capture(self.pa, find_loopback(self.pa, self.cfg.loopback))
+
     # ---------------------------------------------------------------- hilos
     def run(self):
         threads = [threading.Thread(target=self._proc, args=(d,), name=f"proc-{d}", daemon=True)
                    for d in self.caps]
         threads += [threading.Thread(target=f, name=n, daemon=True)
                     for f, n in ((self._asr_loop, "asr"), (self._mt_loop, "mt"), (self._tts_loop, "tts"))]
+        if hasattr(self, "listen_q"):
+            threads.append(threading.Thread(target=self._listen_loop, name="listen", daemon=True))
         for t in threads:
             t.start()
         for c in self.caps.values():
@@ -143,6 +173,11 @@ class Engine:
         while not self.stop.is_set():
             t_cb, data = cap.q.get()
             for f in framer.push(t_cb, data):
+                if (d == "B" and self.cfg.listen_gate and self.cfg.b_mode != "ptt"
+                        and time.perf_counter() < getattr(self, "_listen_until", 0.0)):
+                    # suena la traducción al castellano: si no usás auriculares, el mic la
+                    # tomaría como voz tuya y la mandaría traducida a la llamada
+                    f.samples = np.zeros_like(f.samples)
                 if ptt is not None and self.cfg.b_mode == "ptt":
                     seg = ptt.push(f, self.ptt.pressed, self.ptt.t_release)
                     talking = self.ptt.pressed
@@ -211,6 +246,37 @@ class Engine:
                 self.tts_q.put(seg, "B")
             else:
                 self._finish(seg, seg.ts["mt_end"])
+                if self.cfg.listen and hasattr(self, "listen_q") and not seg.ts.get("passthrough"):
+                    self.listen_q.put(seg)
+
+    def _listen_loop(self):
+        """Traducción al castellano en los auriculares, con Teams bajito mientras suena."""
+        while True:
+            seg: Segment = self.listen_q.get()
+            if not self.cfg.listen:
+                continue
+            self.ducker.duck()
+            t0 = time.perf_counter()
+            first = True
+            for chunk in self.listen_tts.stream(seg.ts["translation"]):
+                if first:
+                    now = time.perf_counter()
+                    total = (now - seg.t_speech_end) * 1000
+                    self.listen_results.append(total)
+                    self._emit({"type": "listen", "seq": seg.seq, "tgt": seg.ts["translation"],
+                                "tts_ms": round((now - t0) * 1000, 1), "total_ms": round(total, 1)})
+                    first = False
+                self.listen_player.play(chunk, self.listen_tts.sr, last=False)
+                self._listen_until = time.perf_counter() + self.listen_player.queued_s + 0.3
+            self.listen_player.play(np.zeros(0, np.float32), self.listen_tts.sr, last=True)
+            # restaurar Teams cuando terminó de sonar y no hay otra frase esperando
+            while self.listen_q.empty() and self.listen_player.queued_s > 0.02:
+                self._listen_until = time.perf_counter() + self.listen_player.queued_s + 0.3
+                time.sleep(0.03)
+            if self.listen_q.empty():
+                time.sleep(0.25)
+                if self.listen_q.empty():
+                    self.ducker.restore()
 
     def _tts_loop(self):
         while True:
@@ -275,7 +341,9 @@ class Engine:
         return {"type": "state", "ready": hasattr(self, "pa"), "asr": asr.name if asr else None,
                 "b_mode": self.cfg.b_mode, "ptt_key": self.cfg.ptt_key, "ptt": bool(ptt and ptt.pressed),
                 "enable_a": self.cfg.enable_a, "enable_b": self.cfg.enable_b,
-                "hangover_ms": self.cfg.seg.hangover_ms}
+                "hangover_ms": self.cfg.seg.hangover_ms,
+                "listen": bool(self.cfg.listen and getattr(self, "listen_ok", False)),
+                "listen_available": bool(getattr(self, "listen_ok", False))}
 
     def _on_command(self, cmd: dict):
         c = cmd["cmd"]
@@ -284,6 +352,12 @@ class Engine:
         elif c == "b_mode" and cmd["value"] in ("ptt", "vad", "interp"):
             self.cfg.b_mode = cmd["value"]
             self._emit({"type": "status", "msg": f"B en modo {self.cfg.b_mode}"})
+            self._emit(self.state(), quiet=True)
+        elif c == "listen":
+            self.cfg.listen = bool(cmd["value"])
+            if not self.cfg.listen and hasattr(self, "ducker"):
+                self.ducker.restore()
+            self._emit({"type": "status", "msg": f"escucha en castellano {'activada' if self.cfg.listen else 'desactivada'}"})
             self._emit(self.state(), quiet=True)
         elif c == "state":
             self._emit(self.state(), quiet=True)
@@ -297,13 +371,21 @@ class Engine:
                 c.close()
             except OSError:
                 pass
+        if hasattr(self, "ducker"):
+            self.ducker.restore_now()  # nunca dejar Teams bajito
         print(summary(self.results))
+        lr = getattr(self, "listen_results", [])
+        if lr:
+            print(f"\nEscucha en castellano — {len(lr)} frases: fin de frase -> audio "
+                  f"p50 {np.percentile(lr, 50):.0f} / p95 {np.percentile(lr, 95):.0f} ms")
         self.log.close()
         self.server.close()
 
 
 # ------------------------------------------------------------------ salida
 def format_event(ev: dict) -> str:
+    if ev["type"] == "listen":
+        return f"  🔊 ES (#{ev['seq']}): tts {ev['tts_ms']:.0f} | total {ev['total_ms']:.0f} ms"
     if ev["type"] != "phrase":
         return f"[{ev['type']}] {ev.get('msg', '')}"
     l = ev["lat"]
@@ -333,10 +415,8 @@ def summary(results: list[dict]) -> str:
 
 def _cfg_dict(cfg: Config) -> dict:
     from dataclasses import asdict
-    d = asdict(cfg)
-    d["tts_voice"] = str(cfg.tts_voice)
-    d["voice_ref"] = str(cfg.voice_ref) if cfg.voice_ref else None
-    return d
+    from pathlib import PurePath
+    return {k: (str(v) if isinstance(v, PurePath) else v) for k, v in asdict(cfg).items()}
 
 
 def setup_console():

@@ -47,6 +47,12 @@ class Config:
     tts: str = "pocket"                      # pocket (tu voz clonada) | piper
     tts_voice: Path = MODELS / "en_US-lessac-medium.onnx"   # voz Piper (fallback)
     voice_ref: Path | None = None            # grabación de tu voz; None = primera de VOICE_REFS que exista
+    # Escuchar a los otros traducidos al castellano (en tus auriculares), con Teams bajito de fondo
+    listen: bool = True
+    listen_voice: Path = MODELS / "es_MX-ald-medium.onnx"   # 90 ms al primer audio (daniela-high: 316)
+    listen_duck: float = 0.35                # volumen de Teams mientras suena la traducción
+    listen_gate: bool = True                 # en manos libres/intérprete, ignorar el mic mientras suena
+    duck_apps: tuple = ("ms-teams.exe", "teams.exe")
     a_queue_max: int = 2                     # backpressure de la dirección A
     host: str = "127.0.0.1"
     port: int = 8765                         # transporte JSON-lines hacia la UI

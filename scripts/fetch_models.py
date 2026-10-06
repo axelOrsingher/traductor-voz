@@ -14,7 +14,12 @@ FILES = {
         "https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.3/src/silero_vad/data/silero_vad.onnx",
     "models/en_US-lessac-medium.onnx": f"{PIPER}/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
     "models/en_US-lessac-medium.onnx.json": f"{PIPER}/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
-    # voz argentina: solo para generar audio de prueba (samples/synth)
+    # escuchar a los otros en castellano: ald (default, 90 ms) y daniela (rioplatense, 316 ms)
+    "models/es_MX-ald-medium.onnx": f"{PIPER}/es/es_MX/ald/medium/es_MX-ald-medium.onnx",
+    "models/es_MX-ald-medium.onnx.json": f"{PIPER}/es/es_MX/ald/medium/es_MX-ald-medium.onnx.json",
+    "models/es_AR-daniela-high.onnx": f"{PIPER}/es/es_AR/daniela/high/es_AR-daniela-high.onnx",
+    "models/es_AR-daniela-high.onnx.json": f"{PIPER}/es/es_AR/daniela/high/es_AR-daniela-high.onnx.json",
+    # voz argentina: también para generar audio de prueba (samples/synth)
     "models/test-voices/es_AR-daniela-high.onnx": f"{PIPER}/es/es_AR/daniela/high/es_AR-daniela-high.onnx",
     "models/test-voices/es_AR-daniela-high.onnx.json": f"{PIPER}/es/es_AR/daniela/high/es_AR-daniela-high.onnx.json",
 }

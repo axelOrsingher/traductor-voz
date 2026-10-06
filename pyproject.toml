@@ -15,6 +15,8 @@ dependencies = [
     "sentencepiece",
     "huggingface_hub",
     "onnx-asr[gpu,hub]==0.12.0",
+    "comtypes>=1.4",
+    "pycaw>=20240210",
 ]
 
 [project.optional-dependencies]

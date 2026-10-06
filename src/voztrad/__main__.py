@@ -30,7 +30,9 @@ def cmd_run(a):
                  cable=a.cable, normalize_voseo=not a.no_norm, parakeet_quant=a.parakeet_quant,
                  enable_a=not a.no_a, enable_b=not a.no_b, port=a.port,
                  gpu_warm=not a.no_gpu_warm, tts=a.tts,
-                 voice_ref=Path(a.voice) if a.voice else None)
+                 voice_ref=Path(a.voice) if a.voice else None, listen=not a.no_listen)
+    if a.listen_voice:
+        cfg.listen_voice = Path(a.listen_voice)
     cfg.seg.hangover_ms = a.hangover
     Engine(cfg, save_segments=a.save_segments).run()
 
@@ -218,6 +220,8 @@ def _run_args(r):
     r.add_argument("--tts", choices=["pocket", "piper"], default="pocket",
                    help="pocket = tu voz clonada (models/voice/me.wav); piper = voz genérica")
     r.add_argument("--voice", default=None, help="wav de referencia para clonar (default models/voice/me.wav)")
+    r.add_argument("--no-listen", action="store_true", help="no reproducir la traducción al castellano")
+    r.add_argument("--listen-voice", default=None, help="voz Piper para el castellano (default es_MX-ald-medium)")
 
 
 if __name__ == "__main__":

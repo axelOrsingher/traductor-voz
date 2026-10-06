@@ -12,3 +12,11 @@ def test_todos_los_modulos_importan():
         if m.name == "voztrad.__main__":
             continue
         importlib.import_module(m.name)
+
+
+def test_config_serializable_al_log():
+    import json
+
+    from voztrad.config import Config
+    from voztrad.engine import _cfg_dict
+    json.dumps(_cfg_dict(Config()))  # cualquier Path nuevo en Config rompía el arranque

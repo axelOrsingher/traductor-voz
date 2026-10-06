@@ -218,6 +218,11 @@ class Overlay(QWidget):
         self.mode_btn = QPushButton("")
         self.mode_btn.setCursor(Qt.PointingHandCursor)
         self.mode_btn.clicked.connect(self.toggle_mode)
+        self.listen_btn = QPushButton("")
+        self.listen_btn.setCursor(Qt.PointingHandCursor)
+        self.listen_btn.setToolTip("Escuchar a los otros traducidos al castellano en tus auriculares\n"
+                                   "(Teams baja de volumen mientras suena la traducción)")
+        self.listen_btn.clicked.connect(self.toggle_listen)
         minus = QPushButton("A−", clicked=lambda: self.set_scale(self.scale - 0.1))
         plus = QPushButton("A+", clicked=lambda: self.set_scale(self.scale + 0.1))
         close = QPushButton("✕", clicked=self.close)
@@ -227,6 +232,7 @@ class Overlay(QWidget):
         bl.addWidget(self.dot)
         bl.addWidget(self.status)
         bl.addStretch()
+        bl.addWidget(self.listen_btn)
         bl.addWidget(self.mode_btn)
         bl.addSpacing(6)
         bl.addWidget(minus)
@@ -342,8 +348,13 @@ class Overlay(QWidget):
         key = self.state.get("ptt_key", "F8")
         if not mode:
             self.mode_btn.hide()
+            self.listen_btn.hide()
             return
         self.mode_btn.show()
+        self.listen_btn.setVisible(bool(self.state.get("listen_available")))
+        on = bool(self.state.get("listen"))
+        self.listen_btn.setText("🔊 ESCUCHAR ES" if on else "🔇 ESCUCHAR ES")
+        self.listen_btn.setStyleSheet(_qss_btn(THEM if on else FAINT))
         label, hint = {
             "ptt": (f"PTT · {key}", f"→ inglés · mantené {key} para hablar"),
             "vad": ("MANOS LIBRES", "→ inglés · traduce cuando terminás la frase"),
@@ -354,6 +365,9 @@ class Overlay(QWidget):
                                  "(manos libres / intérprete: usá auriculares)")
         self.mode_btn.setStyleSheet(_qss_btn(ME))
         self.me.hint.setText(hint)
+
+    def toggle_listen(self):
+        self.send({"cmd": "listen", "value": not self.state.get("listen")})
 
     def toggle_mode(self):
         order = ["ptt", "vad", "interp"]

@@ -15,7 +15,7 @@ out = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "out"
 out.mkdir(parents=True, exist_ok=True)
 
 EVENTS = [
-    {"type": "state", "asr": "parakeet-tdt", "b_mode": "ptt", "ptt_key": "F8", "ptt": False},
+    {"type": "state", "asr": "parakeet-tdt", "b_mode": "interp", "ptt_key": "F8", "ptt": False, "listen": True, "listen_available": True},
     {"type": "phrase", "dir": "A", "src": "Can you share your screen so we can look at the dashboard?",
      "tgt": "¿Podés compartir tu pantalla así vemos el tablero?", "lat": {"total": 784}},
     {"type": "phrase", "dir": "B", "src": "Hola Mateo, ¿cómo estás? ¿Todo tranquilo?",
