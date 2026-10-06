@@ -28,6 +28,15 @@ Salida de consola del motor en `logs\engine-console.txt`, frases y latencias en 
 Overlay: arrastrar desde la barra superior (snap nativo de Windows), redimensionar desde la esquina,
 A−/A+ tamaño de letra, clic derecho = opciones (original, latencia, opacidad, limpiar). Angosto → se apila.
 
+**Latencia (medido, A = lo que dicen ellos):** subtítulo ~390 ms después de que terminan la
+frase, castellano audible ~530 ms. Claves: Smart Turn v3.2 decide a los 200 ms de silencio si la
+frase terminó (antes se esperaban 500 ms); MT en GPU; subtítulos en vivo mientras hablan.
+
+**Traducción en dos niveles:** opus-mt (~30 ms) sale al instante; TranslateGemma-4B (llama.cpp,
+~340 ms) reemplaza el subtítulo con una traducción mucho más fiel en modismos, y se usa para tu
+voz cuando hay audio anterior sonando (no suma latencia). Parakeet va en fp16 para que entre todo
+en 6 GB (total medido 4,46 GB). `--no-refine` lo apaga. Conviene cerrar juegos durante llamadas.
+
 **Escuchar a los otros en castellano** (🔊 ESCUCHAR ES en el overlay, activado por defecto):
 lo que dicen en inglés se dice en castellano por tus auriculares (~0,8 s después de cada frase,
 medido) con Teams bajado al 35% mientras suena. La dirección A captura todo el audio del sistema

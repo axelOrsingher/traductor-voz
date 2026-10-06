@@ -53,7 +53,8 @@ class Config:
     tts_voice: Path = MODELS / "en_US-lessac-medium.onnx"   # voz Piper (fallback)
     voice_ref: Path | None = None            # grabación de tu voz; None = primera de VOICE_REFS que exista
     partials: bool = True                    # subtítulos en vivo mientras alguien habla
-    smart_turn: bool = True                  # fin de turno con Smart Turn v3.2 (ver smartturn.py)
+    refine: bool = True                      # 2º nivel: TranslateGemma refina subtítulos (y tu voz si hay tiempo)
+    smart_turn: bool = True                 # fin de turno con Smart Turn v3.2 (ver smartturn.py)
     # Escuchar a los otros traducidos al castellano (en tus auriculares), con Teams bajito de fondo
     listen: bool = True
     listen_voice: Path = MODELS / "es_MX-ald-medium.onnx"   # 90 ms al primer audio (daniela-high: 316)

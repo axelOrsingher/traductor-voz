@@ -90,7 +90,18 @@ class Engine:
         self._emit({"type": "status", "msg": "cargando modelos"})
 
         t = time.perf_counter()
-        self.asr = asr_mod.load(cfg.asr, cfg.whisper_model, cfg.parakeet_quant)
+        # con el refinador, Parakeet en fp16 para que TranslateGemma entre en los 6 GB
+        quant = cfg.parakeet_quant or ("fp16" if cfg.refine else None)
+        self.asr = asr_mod.load(cfg.asr, cfg.whisper_model, quant)
+        self.refiner = None
+        self.refine_q: queue.Queue = queue.Queue()
+        self._asr_busy = False
+        if cfg.refine:
+            try:
+                from .refine import Refiner
+                self.refiner = Refiner()
+            except Exception as e:  # noqa: BLE001 — sin refinador se sigue con la traducción rápida
+                self._emit({"type": "status", "msg": f"traducción refinada no disponible: {e}"})
         self.warmer = None
         if cfg.gpu_warm:
             from .gpuwarm import GpuWarmer
@@ -164,6 +175,8 @@ class Engine:
                    for d in self.caps]
         threads += [threading.Thread(target=f, name=n, daemon=True)
                     for f, n in ((self._asr_loop, "asr"), (self._mt_loop, "mt"), (self._tts_loop, "tts"))]
+        if self.refiner:
+            threads.append(threading.Thread(target=self._refine_loop, name="refine", daemon=True))
         if hasattr(self, "listen_q"):
             threads.append(threading.Thread(target=self._listen_loop, name="listen", daemon=True))
         for t in threads:
@@ -267,8 +280,12 @@ class Engine:
                 self._partials.pop(seg.direction, None)
             src, _ = LANG[seg.direction]
             seg.ts["asr_start"] = time.perf_counter()
-            with self._gpu():
-                text = self.asr.transcribe(seg.audio, src)
+            self._asr_busy = True
+            try:
+                with self._gpu():
+                    text = self.asr.transcribe(seg.audio, src)
+            finally:
+                self._asr_busy = False
             seg.ts["asr_end"] = time.perf_counter()
             if not text:
                 continue
@@ -305,6 +322,8 @@ class Engine:
                 self._finish(seg, seg.ts["mt_end"])
                 if self.cfg.listen and hasattr(self, "listen_q") and not seg.ts.get("passthrough"):
                     self.listen_q.put(seg)
+                if self.refiner and not seg.ts.get("passthrough") and len(text.split()) >= 2:
+                    self.refine_q.put(seg)
 
     def _listen_loop(self):
         """Traducción al castellano en los auriculares, con Teams bajito mientras suena."""
@@ -343,6 +362,15 @@ class Engine:
             # Tempo adaptativo: si todavía está sonando inglés anterior, este fragmento va más
             # rápido (sin cambiar el tono) para no acumular atraso en monólogos.
             backlog = self.player.queued_s
+            # Traducción buena (TranslateGemma) SOLO si cabe dentro del audio que ya está
+            # sonando: así no suma latencia. Si no llega a tiempo, va la rápida.
+            budget_ms = backlog * 1000 - 120
+            if self.refiner and not seg.ts.get("passthrough") and budget_ms > self.refiner.ema_ms:
+                good = self.refiner.translate(seg.ts["text"], "es", "en", timeout=budget_ms / 1000)
+                if good:
+                    seg.ts["translation_fast"], seg.ts["translation"] = seg.ts["translation"], good
+                    seg.ts["refined_voice"] = True
+                backlog = self.player.queued_s
             rate = rate_for_backlog(backlog)
             seg.ts["tempo"], seg.ts["backlog_s"] = rate, round(backlog, 2)
             stretch = Wsola(rate, self.tts.sr) if rate != 1.0 else None
@@ -356,6 +384,23 @@ class Engine:
                 self.player.play(chunk, self.tts.sr, last=False)
             tail = stretch.push(np.zeros(0, np.float32), last=True) if stretch else np.zeros(0, np.float32)
             self.player.play(tail, self.tts.sr, last=True)  # vacía WSOLA y el resampler
+            if self.refiner and not seg.ts.get("refined_voice") and not seg.ts.get("passthrough"):
+                self.refine_q.put(seg)  # la voz salió con la rápida: al menos refinar el subtítulo
+
+    def _refine_loop(self):
+        """Subtítulos: reemplaza la traducción rápida por la de TranslateGemma cuando llega."""
+        while True:
+            seg: Segment = self.refine_q.get()
+            src, tgt = LANG[seg.direction]
+            t0 = time.perf_counter()
+            # Ceder la GPU al ASR: medido, con TranslateGemma generando el ASR pasa de 119 a
+            # 187 ms. Un subtítulo refinado 100 ms después no se nota; un ASR más lento, sí.
+            while (len(self.asr_q) or self._asr_busy) and time.perf_counter() - t0 < 1.0:
+                time.sleep(0.01)
+            good = self.refiner.translate(seg.ts["text"], src, tgt, timeout=3.0)
+            if good and good != seg.ts["translation"]:
+                self._emit({"type": "refine", "dir": seg.direction, "seq": seg.seq, "tgt": good,
+                            "fast": seg.ts["translation"], "ms": round((time.perf_counter() - t0) * 1000)})
 
     # ---------------------------------------------------------- métricas
     def _finish(self, seg: Segment, t_out: float):
@@ -377,6 +422,7 @@ class Engine:
               "src": ts["text"], "tgt": ts["translation"], "norm": ts.get("normalized"),
               "lang": ts.get("lang"), "passthrough": ts.get("passthrough", False),
               "tempo": ts.get("tempo"), "backlog_s": ts.get("backlog_s"),
+              "refined": bool(ts.get("refined_voice")), "fast": ts.get("translation_fast"),
               "end": seg.end_reason, "turn_p": None if seg.turn_prob is None else round(seg.turn_prob, 3),
               "lat": {k: (round(v, 1) if v is not None else None) for k, v in lat.items()}}
         self.results.append(ev)
@@ -431,6 +477,8 @@ class Engine:
                 pass
         if hasattr(self, "ducker"):
             self.ducker.restore_now()  # nunca dejar Teams bajito
+        if getattr(self, "refiner", None):
+            self.refiner.close()
         print(summary(self.results))
         lr = getattr(self, "listen_results", [])
         if lr:

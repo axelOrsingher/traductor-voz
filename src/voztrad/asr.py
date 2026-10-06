@@ -12,7 +12,7 @@ from typing import Protocol
 import numpy as np
 
 from . import cuda_dlls  # noqa: F401  (antes que ctranslate2 / onnxruntime)
-from .config import SR
+from .config import MODELS, SR
 
 
 class ASR(Protocol):
@@ -44,10 +44,20 @@ class ParakeetASR:
         so = ort.SessionOptions()
         so.add_session_config_entry("session.intra_op.allow_spinning", "0")
         so.add_session_config_entry("session.inter_op.allow_spinning", "0")
-        self.name = f"parakeet-tdt-0.6b-v3-{quantization or 'fp32'}"
+        # fp16: encoder convertido sin torch (scripts/convert_parakeet_fp16.py). Medido: VRAM
+        # 1,7 GB vs 3,1-3,5 GB en fp32, 55/57 transcripciones idénticas, +30 ms. Hace lugar
+        # para TranslateGemma (refine.py) en los 6 GB.
+        path = None
+        if quantization == "fp16":
+            path = FP16_DIR if (FP16_DIR / "encoder-model.onnx").exists() else None
+            quantization = None
+            self.name = "parakeet-tdt-0.6b-v3-" + ("fp16" if path else "fp32")
+        else:
+            self.name = f"parakeet-tdt-0.6b-v3-{quantization or 'fp32'}"
+        cuda = ("CUDAExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})
         self.model = onnx_asr.load_model(
-            "nemo-parakeet-tdt-0.6b-v3", quantization=quantization, sess_options=so,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+            "nemo-parakeet-tdt-0.6b-v3", path=path, quantization=quantization, sess_options=so,
+            providers=[cuda, "CPUExecutionProvider"])
 
     def transcribe(self, audio: np.ndarray, lang: str) -> str:
         text = str(self.model.recognize(audio, sample_rate=SR)).strip()
@@ -56,6 +66,7 @@ class ParakeetASR:
         return _OPEN_SPACE.sub(r"\1", text)  # "¿ cómo" -> "¿cómo"
 
 
+FP16_DIR = MODELS / "parakeet-tdt-0.6b-v3-fp16"
 _GLUED = __import__("re").compile(r"([.,;:?!])([¿¡A-Za-zÁÉÍÓÚÑáéíóúñ])")
 _OPEN_SPACE = __import__("re").compile(r"([¿¡])\s+")
 

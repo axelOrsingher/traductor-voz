@@ -190,6 +190,14 @@ class Column(QWidget):
             self._timer.stop()
             self.typing.hide()
 
+    def refine(self, seq: int, text: str):
+        """Llegó la traducción buena (TranslateGemma): reemplaza la rápida en la tarjeta."""
+        for c in reversed(self.cards):
+            if c.ev.get("seq") == seq:
+                c.ev["tgt"] = text
+                c.main.setText(text)
+                return
+
     def set_partial(self, text: str | None, scale: float = 1.0):
         self._partial_clear.stop()
         if not text:
@@ -343,6 +351,9 @@ class Overlay(QWidget):
             col.set_active(ev["active"], "hablan…" if ev["dir"] == "A" else "hablás…")
             if not ev["active"]:
                 col.expire_partial()
+        elif t == "refine":
+            col = self.them if ev["dir"] == "A" else self.me
+            col.refine(ev["seq"], ev["tgt"])
         elif t == "partial":
             col = self.them if ev["dir"] == "A" else self.me
             col.set_partial(ev["tgt"], self.scale)

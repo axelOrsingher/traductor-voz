@@ -131,6 +131,11 @@ pa.terminate()
 ph = [e for e in all_events if e.get("type") == "phrase" and e["dir"] == "A"]
 ls = [e for e in all_events if e.get("type") == "listen"]
 pa_ = [e for e in all_events if e.get("type") == "partial"]
+rf_ = [e for e in all_events if e.get("type") == "refine"]
+print(f"refinados: {len(rf_)}" + (f" | p50 {np.percentile([e['ms'] for e in rf_], 50):.0f} ms" if rf_ else ""))
+for e in rf_[:5]:
+    print(f"  rápida: {e['fast']}")
+    print(f"  buena : {e['tgt']}")
 print(f"parciales en vivo: {len(pa_)}", [p["tgt"][:40] for p in pa_[:4]])
 print(f"\nfrases A: {len(ph)} (se reprodujeron {len(wavs) * args.rounds}); "
       f"en castellano re-capturadas (eco): {sum(e.get('passthrough') for e in ph)}")
