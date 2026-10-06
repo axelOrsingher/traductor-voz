@@ -27,6 +27,7 @@ from voztrad import asr as asr_mod  # noqa: E402
 from voztrad.audio import Framer  # noqa: E402
 from voztrad.config import FRAME_MS, SR, Config, SegmenterConfig  # noqa: E402
 from voztrad.mt import Translator  # noqa: E402
+from voztrad.tempo import rate_for_backlog  # noqa: E402
 from voztrad.tts import load_tts  # noqa: E402
 from voztrad.vad import Segmenter  # noqa: E402
 from voztrad.voseo import normalize  # noqa: E402
@@ -58,7 +59,7 @@ def segments(interp: bool):
     return start, out
 
 
-for mode in ("vad", "interp"):
+for mode, tempo in (("vad", False), ("interp", False), ("interp", True)):
     speech_start, segs = segments(mode == "interp")
     free_at = 0.0       # pipeline (ASR->MT->TTS) libre
     play_end = 0.0      # fin de lo que ya está sonando
@@ -74,12 +75,14 @@ for mode in ("vad", "interp"):
                 first = time.perf_counter() - c
             chunks.append(ch)
         compute = time.perf_counter() - c
-        dur = sum(len(ch) for ch in chunks) / tts.sr
-        start = max(t0 + first, play_end)
+        ready = t0 + first
+        rate = rate_for_backlog(max(0.0, play_end - ready)) if tempo else 1.0
+        dur = sum(len(ch) for ch in chunks) / tts.sr / rate
+        start = max(ready, play_end)
         play_end = start + dur
         free_at = t0 + compute
         rows.append((t_emit, start, dur, text, en))
-    print(f"\n=== {mode.upper()}  ({len(rows)} fragmento{'s' if len(rows) != 1 else ''})")
+    print(f"\n=== {mode.upper()}{' + TEMPO' if tempo else ''}  ({len(rows)} fragmento{'s' if len(rows) != 1 else ''})")
     for t_emit, start, dur, text, en in rows:
         print(f"  cierre {t_emit - speech_start:5.2f}s → suena {start - speech_start:5.2f}s "
               f"(+{(start - t_emit) * 1000:4.0f} ms) dura {dur:4.1f}s | {text}\n{'':48}→ {en}")

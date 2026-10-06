@@ -122,6 +122,8 @@ class CablePlayer:
         # La escritura bloquea al ritmo del audio: va en un hilo propio, así el TTS
         # puede ir generando el próximo trozo mientras suena el actual (streaming).
         self._q: queue.Queue = queue.Queue()
+        self._queued = 0          # frames en cola + escribiéndose (para el tempo adaptativo)
+        self._lock = threading.Lock()
         self._rs: soxr.ResampleStream | None = None
         self._rs_sr = 0
         threading.Thread(target=self._writer, name="cable-out", daemon=True).start()
@@ -137,14 +139,25 @@ class CablePlayer:
             if last:
                 self._rs = None
         if len(audio):
-            self._q.put(np.repeat(audio[:, None], self.channels, axis=1).tobytes())
+            with self._lock:
+                self._queued += len(audio)
+            self._q.put((len(audio), np.repeat(audio[:, None], self.channels, axis=1).tobytes()))
+
+    @property
+    def queued_s(self) -> float:
+        """Segundos de audio que todavía no terminaron de sonar."""
+        with self._lock:
+            return self._queued / self.rate
 
     def _writer(self):
         while True:
-            data = self._q.get()
-            if data is None:
+            item = self._q.get()
+            if item is None:
                 return
+            n, data = item
             self._stream.write(data)
+            with self._lock:
+                self._queued -= n
 
     def close(self):
         self._q.put(None)

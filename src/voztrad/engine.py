@@ -26,6 +26,7 @@ from . import asr as asr_mod
 from .audio import CablePlayer, Capture, Framer, find_input, find_loopback, find_output
 from .config import ROOT, SR, Config
 from .langid import detect
+from .tempo import Wsola, rate_for_backlog
 from .mt import Translator
 from .transport import JsonLinesServer
 from .vad import PushToTalk, Segment, Segmenter
@@ -216,13 +217,22 @@ class Engine:
             seg: Segment = self.tts_q.get()
             t0 = time.perf_counter()
             first = None
+            # Tempo adaptativo: si todavía está sonando inglés anterior, este fragmento va más
+            # rápido (sin cambiar el tono) para no acumular atraso en monólogos.
+            backlog = self.player.queued_s
+            rate = rate_for_backlog(backlog)
+            seg.ts["tempo"], seg.ts["backlog_s"] = rate, round(backlog, 2)
+            stretch = Wsola(rate, self.tts.sr) if rate != 1.0 else None
             for chunk in self.tts.stream(seg.ts["translation"]):
-                if first is None:
+                if stretch:
+                    chunk = stretch.push(chunk)
+                if first is None and len(chunk):
                     first = time.perf_counter()
                     seg.ts["tts_first"] = first - t0
                     self._finish(seg, first)  # la voz empieza a salir hacia Teams
                 self.player.play(chunk, self.tts.sr, last=False)
-            self.player.play(np.zeros(0, np.float32), self.tts.sr, last=True)  # vacía el resampler
+            tail = stretch.push(np.zeros(0, np.float32), last=True) if stretch else np.zeros(0, np.float32)
+            self.player.play(tail, self.tts.sr, last=True)  # vacía WSOLA y el resampler
 
     # ---------------------------------------------------------- métricas
     def _finish(self, seg: Segment, t_out: float):
@@ -243,6 +253,7 @@ class Engine:
               "audio_s": round(seg.dur_s, 2), "forced": seg.forced, "partial": seg.partial,
               "src": ts["text"], "tgt": ts["translation"], "norm": ts.get("normalized"),
               "lang": ts.get("lang"), "passthrough": ts.get("passthrough", False),
+              "tempo": ts.get("tempo"), "backlog_s": ts.get("backlog_s"),
               "lat": {k: (round(v, 1) if v is not None else None) for k, v in lat.items()}}
         self.results.append(ev)
         self._emit(ev)

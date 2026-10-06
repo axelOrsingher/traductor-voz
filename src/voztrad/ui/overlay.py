@@ -350,8 +350,7 @@ class Overlay(QWidget):
             "interp": ("INTÉRPRETE", "→ inglés · va traduciendo en cada pausa"),
         }.get(mode, (mode, ""))
         self.mode_btn.setText(label)
-        self.mode_btn.setToolTip("Cambiar modo: push-to-talk → manos libres → intérprete
-"
+        self.mode_btn.setToolTip("Cambiar modo: push-to-talk → manos libres → intérprete\n"
                                  "(manos libres / intérprete: usá auriculares)")
         self.mode_btn.setStyleSheet(_qss_btn(ME))
         self.me.hint.setText(hint)

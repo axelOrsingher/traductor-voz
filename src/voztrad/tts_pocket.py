@@ -39,6 +39,11 @@ MAX_TOKENS_PER_CHUNK = 50       # idem default_parameters.py
 SILENCE_RMS = 0.01              # trozos iniciales más bajos que esto no se mandan
 MAX_LEADING_SKIP = 6            # como mucho ~0,5 s de silencio inicial salteado
 MAX_PAUSE_FRAMES = 4            # pausa interna máxima: 4 x 80 ms
+# "Soplido": respiración/siseo que el modelo genera antes de hablar y después del EOS
+# (medido en frases de la llamada: RMS 0.003-0.03 con centroide 2-4.4 kHz; la voz está en
+# 0.3-0.6 kHz). El usuario lo oía como "tsss" / toma de aire al final de cada fragmento.
+BREATH_RMS = 0.03
+BREATH_CENTROID_HZ = 1800
 
 
 def _sent_split(text: str) -> list[str]:
@@ -126,18 +131,23 @@ class PocketTTS:
         """
         first_block = True
         quiet_run = 0
+        last = 0.0
         for block in self._chunks(text):
             for i, audio in enumerate(self._stream_sentence(block)):
                 silent = float(np.sqrt(np.mean(audio ** 2))) < SILENCE_RMS
-                # el modelo arranca con ~300 ms de silencio: no hacer esperar a nadie por eso
-                if first_block and i < MAX_LEADING_SKIP and silent:
+                # el modelo arranca con ~300 ms de silencio o una inspiración: no se manda
+                if first_block and i < MAX_LEADING_SKIP and (silent or _breathy(audio, self.sr)):
                     continue
                 first_block = False
                 # y a veces deja pausas de 1-2 s entre oraciones: se recortan a MAX_PAUSE_FRAMES
                 quiet_run = quiet_run + 1 if silent else 0
                 if quiet_run > MAX_PAUSE_FRAMES:
                     continue
+                last = float(audio[-1])
                 yield audio
+            if not first_block and abs(last) > 1e-3:
+                yield np.linspace(last, 0.0, self.sr // 100, dtype=np.float32)  # 10 ms: sin click
+                last = 0.0
 
     def _chunks(self, text: str) -> list[str]:
         blocks, cur, cur_tok = [], [], 0
@@ -172,6 +182,7 @@ class PocketTTS:
         std = math.sqrt(self.temperature)
         dt = 1.0 / self.lsd_steps
         eos_step = None
+        pending = None
         for step in range(max_gen):
             cond, eos_logit, state = self._run_main(prev, no_text, state)
             x = (self._rng.standard_normal((1, LATENT)) * std).astype(np.float32)
@@ -188,7 +199,31 @@ class PocketTTS:
             out = self.mimi.run(None, {"latent": latent, **mimi})
             mimi = {n.replace("out_", "", 1): v for n, v in zip(mimi_names, out) if n.startswith("out_state_")}
             prev = latent
-            yield out[0].reshape(-1).astype(np.float32)
+            audio = out[0].reshape(-1).astype(np.float32)
+            if eos_step is None:
+                yield audio
+                continue
+            # Ya marcó fin de frase: se retiene un trozo para poder descartarlo si resulta
+            # ser soplido (solo afecta el final, no el arranque).
+            if _breathy(audio, self.sr):
+                if pending is not None and not _breathy(pending, self.sr):
+                    yield pending
+                return  # lo que sigue es respiración/siseo
+            if pending is not None:
+                yield pending
+            pending = audio
+        if pending is not None and not _breathy(pending, self.sr):
+            yield pending
+
+
+def _breathy(chunk: np.ndarray, sr: int) -> bool:
+    """Trozo de poca energía y agudo: respiración / siseo, no voz."""
+    rms = float(np.sqrt(np.mean(chunk ** 2)))
+    if rms >= BREATH_RMS or rms < 1e-4:
+        return False
+    sp = np.abs(np.fft.rfft(chunk * np.hanning(len(chunk))))
+    f = np.fft.rfftfreq(len(chunk), 1 / sr)
+    return float((sp * f).sum() / (sp.sum() + 1e-9)) > BREATH_CENTROID_HZ
 
 
 def _np_type(t: str):
