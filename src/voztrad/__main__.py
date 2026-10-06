@@ -26,6 +26,8 @@ from .config import ROOT, SR, Config  # noqa: E402
 def cmd_run(a):
     from .engine import Engine, setup_console
     setup_console()
+    if _port_open(a.port):
+        sys.exit(f"ya hay un motor corriendo en el puerto {a.port}: cerralo primero (o usá --port)")
     cfg = Config(asr=a.asr, b_mode=a.b_mode, ptt_key=a.ptt_key, mic=a.mic, loopback=a.loopback,
                  cable=a.cable, normalize_voseo=not a.no_norm, parakeet_quant=a.parakeet_quant,
                  enable_a=not a.no_a, enable_b=not a.no_b, port=a.port,
@@ -51,10 +53,40 @@ def cmd_voice(a):
         voice.record(a.mic)
 
 
+def _port_open(port: int) -> bool:
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+_mutex = None
+
+
+def _single_instance(name: str) -> bool:
+    """Mutex con nombre de Windows: False si otra instancia ya lo tiene."""
+    global _mutex
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    _mutex = k32.CreateMutexW(None, False, f"Local\\{name}")
+    return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
+
+
 def cmd_app(a):
     """Motor en un subproceso (sin consola) + overlay en este proceso."""
     import socket
 
+    if not _single_instance("voztrad-overlay"):
+        sys.exit(0)  # ya hay un overlay abierto: no duplicar
+    from .ui.overlay import main as ui_main
+    if _port_open(a.port):
+        # ya hay un motor corriendo (p.ej. quedó de antes): solo abrir el overlay
+        sys.exit(ui_main(port=a.port))
     run_argv = [x for x in sys.argv[sys.argv.index("app") + 1:]]
     (ROOT / "logs").mkdir(exist_ok=True)
     out = open(ROOT / "logs" / "engine-console.txt", "w", encoding="utf-8")
@@ -63,7 +95,6 @@ def cmd_app(a):
     eng = subprocess.Popen([exe, "-m", "voztrad", "run", *run_argv], cwd=ROOT, stdout=out,
                            stderr=subprocess.STDOUT, creationflags=flags,
                            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-    from .ui.overlay import main as ui_main
     try:
         code = ui_main(port=a.port)
     finally:
