@@ -31,4 +31,4 @@ fi
 # MVP defaults: Parakeet ASR, generic Piper voice, no refiner / listen / smart-turn.
 # Any extra flags passed to this launcher are forwarded to the engine.
 exec python -m voztrad app --asr parakeet --tts piper \
-     --no-refine --no-listen --no-smart-turn "$@"
+     --no-refine --no-smart-turn "$@"

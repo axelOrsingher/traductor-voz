@@ -25,10 +25,12 @@ import silero_vad
 sv = pathlib.Path(silero_vad.__file__).parent / "data" / "silero_vad.onnx"
 shutil.copy(sv, models / "silero_vad.onnx")
 from huggingface_hub import hf_hub_download
-base = "en/en_US/lessac/medium/en_US-lessac-medium.onnx"
-for f in (base, base + ".json"):
-    p = hf_hub_download("rhasspy/piper-voices", f)
-    shutil.copy(p, models / pathlib.Path(f).name)
+voices = ["en/en_US/lessac/medium/en_US-lessac-medium.onnx",   # your voice -> English (B)
+          "es/es_MX/ald/medium/es_MX-ald-medium.onnx"]          # listen-back in Spanish (A)
+for base in voices:
+    for f in (base, base + ".json"):
+        p = hf_hub_download("rhasspy/piper-voices", f)
+        shutil.copy(p, models / pathlib.Path(f).name)
 print("models ready:", sorted(p.name for p in models.iterdir()))
 PY
 

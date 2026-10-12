@@ -29,7 +29,8 @@ else:
     pyaudio = None  # listen-in-Spanish path (WASAPI-only) is disabled on Linux
 
 from . import asr as asr_mod
-from .audio import CablePlayer, Capture, Framer, PyAudio, find_input, find_loopback, find_output
+from .audio import (CablePlayer, Capture, Framer, PyAudio, find_default_output,
+                    find_input, find_loopback, find_output)
 from .config import FRAME_MS, ROOT, SR, Config
 from .langid import detect
 from .tempo import Wsola, rate_for_backlog
@@ -139,8 +140,7 @@ class Engine:
                 from .ducker import Ducker
                 from .tts import Piper
                 self.listen_tts = Piper(cfg.listen_voice)
-                api = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-                self.listen_player = CablePlayer(self.pa, self.pa.get_device_info_by_index(api["defaultOutputDevice"]))
+                self.listen_player = CablePlayer(self.pa, find_default_output(self.pa))
                 self.ducker = Ducker(cfg.duck_apps, cfg.listen_duck)
                 self.listen_q: queue.Queue = queue.Queue()
                 self.listen_results: list[float] = []
@@ -162,6 +162,11 @@ class Engine:
     def _open_a_capture(self):
         """Loopback de todo el sistema EXCEPTO este proceso: así la traducción al castellano que
         suena en los auriculares no vuelve a entrar por la dirección A."""
+        if sys.platform != "win32":
+            # PipeWire: A captures the voztrad_calls monitor; our Spanish TTS goes to the
+            # real output (not voztrad_calls), so it is never re-captured -> listen is safe.
+            self.listen_ok = True
+            return Capture(self.pa, find_loopback(self.pa, self.cfg.loopback))
         if self.cfg.loopback is None:
             try:
                 from .procloop import ProcessLoopbackCapture

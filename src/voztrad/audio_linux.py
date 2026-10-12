@@ -56,6 +56,13 @@ def find_output(pa, name: str) -> dict:
     return {"name": target, "target": target}
 
 
+def find_default_output(pa) -> dict:
+    """The real output (headphones) the Spanish listen-back is played to. It is
+    NOT voztrad_calls, so it never re-enters the direction-A capture."""
+    target = _pactl("get-default-sink") or "@DEFAULT_SINK@"
+    return {"name": target, "target": target}
+
+
 class Capture:
     """`parec` subprocess -> self.q as (t, bytes) at 16 kHz mono float32."""
 

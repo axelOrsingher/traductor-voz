@@ -53,7 +53,7 @@ class Framer:
 
 if sys.platform == "win32":
     from .audio_win import (  # noqa: F401,E402
-        CablePlayer, Capture, PyAudio, find_input, find_loopback, find_output)
+        CablePlayer, Capture, PyAudio, find_default_output, find_input, find_loopback, find_output)
 else:
     from .audio_linux import (  # noqa: F401,E402
-        CablePlayer, Capture, PyAudio, find_input, find_loopback, find_output)
+        CablePlayer, Capture, PyAudio, find_default_output, find_input, find_loopback, find_output)

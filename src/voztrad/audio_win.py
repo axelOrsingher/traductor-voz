@@ -50,6 +50,11 @@ def find_output(pa: pyaudio.PyAudio, name: str) -> dict:
     raise RuntimeError(f"no hay salida WASAPI que contenga {name!r}")
 
 
+def find_default_output(pa: pyaudio.PyAudio) -> dict:
+    api = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+    return pa.get_device_info_by_index(api["defaultOutputDevice"])
+
+
 class Capture:
     """Input stream. Raw blocks go to self.q as (t_callback, bytes)."""
 
