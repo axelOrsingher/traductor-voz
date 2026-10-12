@@ -31,16 +31,53 @@ def cmd_run(a):
     setup_console()
     if _port_open(a.port):
         sys.exit(f"ya hay un motor corriendo en el puerto {a.port}: cerralo primero (o usá --port)")
-    cfg = Config(asr=a.asr, b_mode=a.b_mode, ptt_key=a.ptt_key, mic=a.mic, loopback=a.loopback,
-                 cable=a.cable, normalize_voseo=not a.no_norm, parakeet_quant=a.parakeet_quant,
+    # Hardware-aware defaults (auto at launch); any explicit flag below overrides them.
+    prof = {}
+    if not a.no_auto:
+        from .hwdetect import choose_profile, detect
+        prof = choose_profile(detect())
+        for n in prof.get("notes", []):
+            print(f"[auto] {n}", flush=True)
+    pq = a.parakeet_quant
+    if pq == "auto":
+        pq = prof.get("parakeet_quant")
+    if pq == "fp32":
+        pq = None
+    cfg = Config(asr=a.asr or prof.get("asr", "parakeet"),
+                 b_mode=a.b_mode, ptt_key=a.ptt_key, mic=a.mic, loopback=a.loopback,
+                 cable=a.cable, normalize_voseo=not a.no_norm, parakeet_quant=pq,
+                 mt_compute_type=a.mt_compute_type or prof.get("mt_compute_type"),
                  enable_a=not a.no_a, enable_b=not a.no_b, port=a.port,
-                 gpu_warm=not a.no_gpu_warm, tts=a.tts,
+                 gpu_warm=prof.get("gpu_warm", True) and not a.no_gpu_warm,
+                 tts=a.tts or prof.get("tts", "piper"),
                  voice_ref=Path(a.voice) if a.voice else None, listen=not a.no_listen,
-                 refine=not a.no_refine, smart_turn=not a.no_smart_turn)
+                 refine=prof.get("refine", False) and not a.no_refine,
+                 smart_turn=prof.get("smart_turn", False) and not a.no_smart_turn)
     if a.listen_voice:
         cfg.listen_voice = Path(a.listen_voice)
     cfg.seg.hangover_ms = a.hangover
     Engine(cfg, save_segments=a.save_segments).run()
+
+
+def cmd_detect(a):
+    """Show the detected hardware and the profile auto-config would pick."""
+    from .engine import setup_console
+    from .hwdetect import choose_profile, detect
+    setup_console()
+    hw = detect()
+    g = hw["gpu"]
+    print("Hardware")
+    print(f"  GPU   : {g['name']} — {g['vram_mib']} MiB — compute cap {g['compute_cap']}"
+          if g else "  GPU   : none (CPU only)")
+    print(f"  CPU   : {hw['cpu_count']} cores — RAM {hw['ram_gb']} GB")
+    print(f"  Audio : {hw['audio_server']} — voice recording: {'yes' if hw['has_voice_ref'] else 'no'}")
+    prof = choose_profile(hw)
+    print("\nProfile (auto)")
+    for k in ("asr", "parakeet_quant", "mt_compute_type", "refine", "smart_turn", "gpu_warm", "tts"):
+        print(f"  {k:16}: {prof.get(k)}")
+    print("\nWhy")
+    for n in prof["notes"]:
+        print("  -", n)
 
 
 def cmd_voice(a):
@@ -230,6 +267,9 @@ def main():
     rp.add_argument("logs", nargs="+")
     rp.set_defaults(fn=cmd_report)
 
+    d = sub.add_parser("detect", help="mostrar el hardware detectado y el perfil auto-elegido")
+    d.set_defaults(fn=cmd_detect)
+
     a = ap.parse_args()
     from .winperf import disable_throttling
     disable_throttling()
@@ -237,8 +277,13 @@ def main():
 
 
 def _run_args(r):
-    r.add_argument("--asr", choices=["whisper", "parakeet"], default="parakeet")
-    r.add_argument("--parakeet-quant", choices=["int8"], default=None)
+    r.add_argument("--no-auto", action="store_true",
+                   help="no autoconfigurar por hardware (por defecto se adapta a la GPU/CPU)")
+    r.add_argument("--asr", choices=["whisper", "parakeet"], default=None,
+                   help="default: según hardware (hwdetect)")
+    r.add_argument("--parakeet-quant", choices=["auto", "int8", "fp16", "fp32"], default="auto")
+    r.add_argument("--mt-compute-type", default=None,
+                   help="CTranslate2 compute_type del MT (default: según arquitectura CUDA)")
     r.add_argument("--b-mode", choices=["ptt", "vad", "interp"], default="ptt",
                    help="ptt = mantener tecla; vad = manos libres; interp = manos libres que va traduciendo en las pausas")
     r.add_argument("--ptt-key", default="F8")
@@ -252,8 +297,8 @@ def _run_args(r):
     r.add_argument("--save-segments", action="store_true", help="guardar cada segmento en out/segments/")
     r.add_argument("--port", type=int, default=8765)
     r.add_argument("--no-gpu-warm", action="store_true", help="no calentar la GPU durante la voz")
-    r.add_argument("--tts", choices=["pocket", "piper"], default="pocket",
-                   help="pocket = tu voz clonada (models/voice/me.wav); piper = voz genérica")
+    r.add_argument("--tts", choices=["pocket", "piper"], default=None,
+                   help="pocket = tu voz clonada (models/voice/me.wav); piper = voz genérica (default: auto)")
     r.add_argument("--voice", default=None, help="wav de referencia para clonar (default models/voice/me.wav)")
     r.add_argument("--no-refine", action="store_true",
                    help="sin TranslateGemma (solo traducción rápida; libera ~2,6 GB de VRAM)")

@@ -111,7 +111,8 @@ class Engine:
         if cfg.gpu_warm:
             from .gpuwarm import GpuWarmer
             self.warmer = GpuWarmer()
-        self.mt = {("en", "es"): Translator("en", "es"), ("es", "en"): Translator("es", "en")}
+        self.mt = {("en", "es"): Translator("en", "es", compute_type=cfg.mt_compute_type),
+                   ("es", "en"): Translator("es", "en", compute_type=cfg.mt_compute_type)}
         for tr in self.mt.values():
             tr.translate("hola")
         self.tts = None

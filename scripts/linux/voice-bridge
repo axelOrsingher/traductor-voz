@@ -28,7 +28,6 @@ if ! pactl list short sinks | grep -q '\bvoztrad_calls\b'; then
   "$HERE/voztrad-audio.sh" setup >/dev/null || true
 fi
 
-# MVP defaults: Parakeet ASR, generic Piper voice, no refiner / listen / smart-turn.
-# Any extra flags passed to this launcher are forwarded to the engine.
-exec python -m voztrad app --asr parakeet --tts piper \
-     --no-refine --no-smart-turn "$@"
+# Models / precision are chosen automatically from the detected hardware
+# (see `python -m voztrad detect`). Any flag passed here overrides the auto choice.
+exec python -m voztrad app "$@"
