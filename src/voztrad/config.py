@@ -41,7 +41,8 @@ class SegmenterConfig:
 class Config:
     asr: str = "whisper"                     # whisper | parakeet
     whisper_model: str = "large-v3-turbo"
-    parakeet_quant: str | None = None        # None (fp32) | "int8"
+    parakeet_quant: str | None = None        # None (fp32) | "int8" | "fp16"
+    mt_compute_type: str | None = None        # None = auto (int8_float16 GPU / int8 CPU); set by hwdetect
     b_mode: str = "ptt"                      # ptt | vad | interp
     ptt_key: str = "F8"
     ptt_max_ms: int = 28000

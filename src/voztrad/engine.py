@@ -21,11 +21,16 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pyaudiowpatch as pyaudio
 import soundfile as sf
 
+if sys.platform == "win32":
+    import pyaudiowpatch as pyaudio
+else:
+    pyaudio = None  # listen-in-Spanish path (WASAPI-only) is disabled on Linux
+
 from . import asr as asr_mod
-from .audio import CablePlayer, Capture, Framer, find_input, find_loopback, find_output
+from .audio import (CablePlayer, Capture, Framer, PyAudio, find_default_output,
+                    find_input, find_loopback, find_output)
 from .config import FRAME_MS, ROOT, SR, Config
 from .langid import detect
 from .tempo import Wsola, rate_for_backlog
@@ -106,7 +111,8 @@ class Engine:
         if cfg.gpu_warm:
             from .gpuwarm import GpuWarmer
             self.warmer = GpuWarmer()
-        self.mt = {("en", "es"): Translator("en", "es"), ("es", "en"): Translator("es", "en")}
+        self.mt = {("en", "es"): Translator("en", "es", compute_type=cfg.mt_compute_type),
+                   ("es", "en"): Translator("es", "en", compute_type=cfg.mt_compute_type)}
         for tr in self.mt.values():
             tr.translate("hola")
         self.tts = None
@@ -126,7 +132,7 @@ class Engine:
         self.mt_q = DualQueue(None)
         self.tts_q = DualQueue(None)
 
-        self.pa = pyaudio.PyAudio()
+        self.pa = PyAudio()
         self.caps: dict[str, Capture] = {}
         self.listen_ok = False
         if cfg.enable_a:
@@ -135,8 +141,7 @@ class Engine:
                 from .ducker import Ducker
                 from .tts import Piper
                 self.listen_tts = Piper(cfg.listen_voice)
-                api = self.pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-                self.listen_player = CablePlayer(self.pa, self.pa.get_device_info_by_index(api["defaultOutputDevice"]))
+                self.listen_player = CablePlayer(self.pa, find_default_output(self.pa))
                 self.ducker = Ducker(cfg.duck_apps, cfg.listen_duck)
                 self.listen_q: queue.Queue = queue.Queue()
                 self.listen_results: list[float] = []
@@ -158,6 +163,11 @@ class Engine:
     def _open_a_capture(self):
         """Loopback de todo el sistema EXCEPTO este proceso: así la traducción al castellano que
         suena en los auriculares no vuelve a entrar por la dirección A."""
+        if sys.platform != "win32":
+            # PipeWire: A captures the voztrad_calls monitor; our Spanish TTS goes to the
+            # real output (not voztrad_calls), so it is never re-captured -> listen is safe.
+            self.listen_ok = True
+            return Capture(self.pa, find_loopback(self.pa, self.cfg.loopback))
         if self.cfg.loopback is None:
             try:
                 from .procloop import ProcessLoopbackCapture

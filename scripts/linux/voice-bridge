@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# voice-bridge launcher (Linux). Opens the engine + subtitle overlay. Closing the
+# overlay shuts everything down. This is what the desktop icon runs.
+#
+#   - ensures the PipeWire virtual devices exist (voztrad_calls / voztrad_mic)
+#   - points the loader at the venv's CUDA 12 libs (dlopen'd by CT2 / onnxruntime)
+#   - forces QT_QPA_PLATFORM=xcb so the frameless overlay stays on top under KWin
+#
+# In your call app, set the microphone to "voztrad_mic_input". Hold F8 to talk,
+# or switch mode (PTT / hands-free / interpreter) from the overlay.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+VENV="$REPO/.venv"
+cd "$REPO"
+
+[ -d "$VENV" ] || { echo "no venv at $VENV — run: scripts/linux/install-linux.sh"; exit 1; }
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+SP=$(python -c "import site; print(site.getsitepackages()[0])")
+export LD_LIBRARY_PATH="$SP/nvidia/cublas/lib:$SP/nvidia/cudnn/lib:$SP/nvidia/cuda_runtime/lib:$SP/nvidia/cuda_nvrtc/lib:$SP/nvidia/curand/lib:$SP/nvidia/cufft/lib:${LD_LIBRARY_PATH:-}"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+
+# create the virtual audio devices if they aren't up yet (reversible; survives until reboot)
+if ! pactl list short sinks | grep -q '\bvoztrad_calls\b'; then
+  "$HERE/voztrad-audio.sh" setup >/dev/null || true
+fi
+
+# Models / precision are chosen automatically from the detected hardware
+# (see `python -m voztrad detect`). Any flag passed here overrides the auto choice.
+exec python -m voztrad app "$@"

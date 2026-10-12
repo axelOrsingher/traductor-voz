@@ -24,13 +24,15 @@ REPOS = {
 
 
 class Translator:
-    def __init__(self, src: str, tgt: str, device: str = "auto", threads: int | None = None):
+    def __init__(self, src: str, tgt: str, device: str = "auto", threads: int | None = None,
+                 compute_type: str | None = None):
         path = Path(snapshot_download(REPOS[(src, tgt)]))
         if device == "auto":
             device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        ct = compute_type or ("int8_float16" if device == "cuda" else "int8")
         try:
             self.model = ctranslate2.Translator(
-                str(path), device=device, compute_type="int8_float16" if device == "cuda" else "int8",
+                str(path), device=device, compute_type=ct,
                 inter_threads=1, intra_threads=threads or min(4, os.cpu_count() or 4))
         except RuntimeError:  # sin CUDA utilizable: CPU
             device = "cpu"

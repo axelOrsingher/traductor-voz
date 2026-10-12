@@ -47,7 +47,7 @@ setup() {
   local m_calls m_loop
   m_calls=$(pactl load-module module-null-sink \
       sink_name="$CALLS_SINK" \
-      sink_properties=device.description="$CALLS_SINK")
+      sink_properties=device.description='voice-bridge (call audio)')
   m_loop=$(pactl load-module module-loopback \
       source="${CALLS_SINK}.monitor" sink="$real_sink" latency_msec=60)
 
@@ -59,7 +59,7 @@ setup() {
   m_remap=$(pactl load-module module-remap-source \
       master="${MIC_SINK}.monitor" \
       source_name="$MIC_SOURCE" \
-      source_properties=device.description='Voztrad Virtual Mic')
+      source_properties=device.description='voice-bridge microphone')
 
   {
     echo "M_CALLS=$m_calls"
@@ -121,6 +121,22 @@ app_volume() {
   pactl set-sink-input-volume "$idx" "${pct}%"
 }
 
+capture_app() {
+  need pactl
+  local app="${1:?usage: capture-app \"<app.name substring>\"}" moved=0
+  # move the app's current playback streams into voztrad_calls so direction A can
+  # capture (and translate) them. New streams don't auto-follow — for a lasting
+  # setup, pick "voice-bridge (call audio)" as the output device inside the call app.
+  while read -r idx; do
+    [ -n "$idx" ] && pactl move-sink-input "$idx" "$CALLS_SINK" 2>/dev/null \
+      && { echo "moved sink-input #$idx -> $CALLS_SINK"; moved=1; }
+  done < <(pactl list sink-inputs | awk -v app="$app" '
+      /^Sink Input #/{idx=substr($3,2)}
+      /application\.name = /{ if (index(tolower($0), tolower(app))) print idx }')
+  [ "$moved" = 1 ] || echo "no current stream matched '$app' (start audio in the app first," \
+      "or set its output device to 'voice-bridge (call audio)')"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   setup)        setup "$@" ;;
@@ -128,5 +144,6 @@ case "$cmd" in
   status)       status ;;
   record-calls) record_calls "$@" ;;
   app-volume)   app_volume "$@" ;;
-  *) echo "usage: $0 {setup [REAL_SINK]|teardown|status|record-calls OUT.wav [SECONDS]|app-volume \"<app>\" <PERCENT>}" >&2; exit 2 ;;
+  capture-app)  capture_app "$@" ;;
+  *) echo "usage: $0 {setup [REAL_SINK]|teardown|status|record-calls OUT.wav [SECONDS]|app-volume \"<app>\" <PERCENT>|capture-app \"<app>\"}" >&2; exit 2 ;;
 esac
