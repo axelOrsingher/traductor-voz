@@ -19,6 +19,9 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+# Materialize HF downloads as real files, not blob symlinks: onnxruntime 1.29's
+# external-data check rejects Parakeet's symlinked encoder-model.onnx.data.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
 from .config import ROOT, SR, Config  # noqa: E402
 

@@ -15,8 +15,17 @@ dependencies = [
     "sentencepiece",
     "huggingface_hub",
     "onnx-asr[gpu,hub]==0.12.0",
-    "comtypes>=1.4",
-    "pycaw>=20240210",
+    "comtypes>=1.4; sys_platform == 'win32'",
+    "pycaw>=20240210; sys_platform == 'win32'",
+    "evdev; sys_platform == 'linux'",
+    # CUDA 12 runtime libs that ctranslate2 + onnxruntime-gpu dlopen at session
+    # creation. On Windows these come from the ~/tools redist (see cuda_dlls.py).
+    "nvidia-cublas-cu12; sys_platform == 'linux'",
+    "nvidia-cudnn-cu12; sys_platform == 'linux'",
+    "nvidia-cuda-runtime-cu12; sys_platform == 'linux'",
+    "nvidia-cuda-nvrtc-cu12; sys_platform == 'linux'",
+    "nvidia-curand-cu12; sys_platform == 'linux'",
+    "nvidia-cufft-cu12; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
