@@ -21,11 +21,15 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pyaudiowpatch as pyaudio
 import soundfile as sf
 
+if sys.platform == "win32":
+    import pyaudiowpatch as pyaudio
+else:
+    pyaudio = None  # listen-in-Spanish path (WASAPI-only) is disabled on Linux
+
 from . import asr as asr_mod
-from .audio import CablePlayer, Capture, Framer, find_input, find_loopback, find_output
+from .audio import CablePlayer, Capture, Framer, PyAudio, find_input, find_loopback, find_output
 from .config import FRAME_MS, ROOT, SR, Config
 from .langid import detect
 from .tempo import Wsola, rate_for_backlog
@@ -126,7 +130,7 @@ class Engine:
         self.mt_q = DualQueue(None)
         self.tts_q = DualQueue(None)
 
-        self.pa = pyaudio.PyAudio()
+        self.pa = PyAudio()
         self.caps: dict[str, Capture] = {}
         self.listen_ok = False
         if cfg.enable_a:
