@@ -36,13 +36,16 @@ you   →  mic → [PTT F8 | VAD] → [ASR es] → [MT es→en] → [TTS] → vi
 
 | Platform | Status |
 |---|---|
-| **Windows 10/11** | ✅ working (current reference platform) |
-| **Linux** (PipeWire / Wayland) | 🚧 in progress — see [`docs/porting/`](docs/porting/) |
+| **Windows 10/11** | ✅ working |
+| **Linux** (PipeWire / Wayland) | ✅ working — validated on Manjaro + KDE Plasma (Wayland) |
 
-The Linux reconnaissance (audio routing, global hotkey, GPU/model VRAM & latency, overlay)
-and a full Windows→Linux code inventory live in
+On Linux the audio routing (PipeWire null-sinks + monitor capture), the global hotkey
+(python-evdev), the GPU models (opus-mt / Parakeet / Silero on CUDA 12) and the always-on-top
+overlay (`QT_QPA_PLATFORM=xcb`) are all verified on the reference machine. Setup, tuning and
+the full mapping of each component live in
 [`docs/porting/linux-recon.md`](docs/porting/linux-recon.md) and
-[`docs/porting/windows-to-linux-inventory.md`](docs/porting/windows-to-linux-inventory.md).
+[`docs/porting/windows-to-linux-inventory.md`](docs/porting/windows-to-linux-inventory.md),
+with ready-to-run helpers in [`scripts/linux/`](scripts/linux/).
 
 ---
 
@@ -55,7 +58,8 @@ and a full Windows→Linux code inventory live in
 - A GPU with enough VRAM for the stack. Parakeet fp16 + opus-mt + VAD fit comfortably; the
   TranslateGemma-4B refiner needs several GB more (see the VRAM notes in the porting docs — on
   a 4 GB card the refiner does not fit alongside the ASR).
-- **Windows only, for now:** [VB-CABLE](https://vb-audio.com/Cable/) virtual audio device.
+- Virtual audio device: on **Windows** install [VB-CABLE](https://vb-audio.com/Cable/); on
+  **Linux** PipeWire provides it via `scripts/linux/voztrad-audio.sh` (null-sink + remap-source).
 
 ## Install (Windows)
 
@@ -71,6 +75,21 @@ and a full Windows→Linux code inventory live in
    .venv\Scripts\python.exe scripts\fetch_models.py   # Silero VAD + Piper voices (ASR/MT self-download)
    .venv\Scripts\python.exe -m pytest tests -q
    ```
+
+## Install (Linux)
+
+PipeWire + Wayland (KDE). The audio devices are created by a script instead of VB-CABLE, and
+the global hotkey uses `evdev` (your user in the `input` group):
+
+```bash
+sudo usermod -aG input "$USER"          # global hotkey via evdev (log out/in once)
+scripts/linux/voztrad-audio.sh setup    # PipeWire null-sinks + virtual mic (reversible)
+scripts/linux/setup_recon_env.sh        # uv venv (Python 3.11) with the CUDA 12 stack
+```
+
+Then run the engine/overlay as below (launch the overlay with `QT_QPA_PLATFORM=xcb` so it stays
+on top under KWin). See [`docs/porting/linux-recon.md`](docs/porting/linux-recon.md) for device
+names, latency tuning and the recommended model precisions on your GPU.
 
 ---
 
