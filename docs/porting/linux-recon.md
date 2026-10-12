@@ -279,6 +279,92 @@ Wayland additionally forbids clients from positioning themselves.)
 
 ---
 
+## 6. Latency & quality optimization (for the port)
+
+Goal: lowest latency and best audio/text quality within the 4 GB VRAM budget. All numbers
+measured on this machine with [`scripts/linux/gpu_bench.py`](../../scripts/linux/gpu_bench.py)
+and the extra benches noted below.
+
+### 6.1 MT — opus-mt en→es, CTranslate2 compute-type sweep
+
+p50 over 5 call-style sentences, beam_size=1 unless noted; "quality" = sentences differing
+from `float32` output:
+
+| compute_type | p50 latency | VRAM Δ | quality vs float32 |
+|---|---|---|---|
+| **`int8`** | **19.0 ms** | **170 MiB** | identical (0/5) |
+| `int8_float32` | 19.6 ms | 170 MiB | identical (0/5) |
+| `float32` | 20.5 ms | 362 MiB | (reference) |
+| `int8_float16` *(repo's current choice)* | 25.7 ms | 226 MiB | 1/5 (synonym) |
+| `float16` | **75.1 ms** | 202 MiB | identical — but **3× slower on Turing** |
+| `int8_float16`, beam=4 | 28.7 ms | — | 3/5 differ, and **worse** ("dashboard"→"salpicadero") |
+
+**Recommendation: switch MT to `int8`, beam_size=1.** It is the fastest (19 ms), smallest
+(170 MiB), and bit-identical to float32 here. Avoid `float16` (3× slower on this GPU — no
+tensor-core win for this model) and avoid beam>1 (slower and lower quality for this domain).
+
+### 6.2 ASR — Parakeet TDT 0.6B v3 precision tradeoff (onnx-asr, CUDA)
+
+Per 2–4 s clip; accuracy = exact-match vs fp32 on the English sample set:
+
+| precision | p50 latency | VRAM Δ | on-disk | accuracy | notes |
+|---|---|---|---|---|---|
+| **fp32** | **~85 ms** (34–99) | **3484 MiB** | ~3.6 GB | reference | fast, but nearly fills the card |
+| **fp16** | ~257 ms (steady-state) | **2516 MiB** | 1312 MB | 8/8 identical | **~3× slower** here despite less VRAM |
+| int8 | ~317 ms | ~294 MiB (GPU) | — | 8/8 identical | ORT runs int8 on **CPU** on Turing → slow |
+
+Surprising result: **fp16 is ~3× slower than fp32** on the GTX 1650 Ti (257 ms steady-state on
+a fixed input, so not per-shape autotuning). The repo's `convert_parakeet_fp16.py`
+(onnxruntime float16 converter, `keep_io_types=True`) saves ~1 GB of VRAM but regresses
+latency badly — likely Cast churn / no tensor-core path for this graph. **int8** is accurate
+but not CUDA-accelerated on Turing (falls to CPU, ~317 ms).
+
+→ **For latency, keep fp32**; for VRAM-constrained coexistence, fp16 is the only option but its
+latency must be optimized first (investigate ORT fp16 graph optimization / `op_block_list`,
+or a tensor-core-friendly export) before relying on it. Do **not** assume fp16/int8 are free wins.
+
+### 6.3 VRAM budget on 4 GB — the real constraint ⚠
+
+| Resident set | VRAM |
+|---|---|
+| fp32 Parakeet + opus-mt `int8` + Silero | ~3.65 GB → fits **alone**, ~0.4 GB free |
+| fp16 Parakeet + opus-mt `int8` + Silero | ~2.7 GB → ~1.3 GB free |
+| llama.cpp **TranslateGemma-4B** refiner (Q4_K_M) | ~2.5–3 GB on its own |
+
+The two-tier refiner the project adds (TranslateGemma-4B via llama.cpp) **cannot coexist with
+Parakeet on this 4 GB card** — even fp16 Parakeet leaves < 1.5 GB. On the XPS the realistic
+options are: run the refiner **on CPU**, use a **much smaller** refiner, or **drop the refiner**
+and ship opus-mt `int8` alone (19 ms, good quality). The original "4.46–4.69 GB of 6.1" figure
+in the git history was on a 6 GB card; it does not transfer to 4 GB.
+
+### 6.4 Audio latency (PipeWire)
+
+- Global clock: **48 kHz, quantum 1024 (~21.3 ms)**, min-quantum 32 (~0.67 ms), max 2048.
+- **Capture the call monitor directly at 16 kHz mono** (`pw-record --rate 16000 --channels 1`):
+  PipeWire resamples 48k→16k for free, so no separate resampler stage before the ASR.
+- A small capture quantum — `PIPEWIRE_LATENCY=256/48000` (~5.3 ms) — ran **without xruns**, well
+  under the 21 ms default. Use it on the capture node to cut input latency.
+- The loopback that lets you hear the raw call adds `latency_msec=60`. For a translator you may
+  lower it or not monitor the raw call at all; it does not affect the ASR capture path.
+
+### 6.5 GPU cold-clock penalty (and keep-alive)
+
+The GPU down-clocks when idle; the first inference after a gap pays a ramp cost
+(fp16 Parakeet, warm p50 257 ms):
+
+| state | SM clock | first inference |
+|---|---|---|
+| warm (steady) | 1905 MHz | 257 ms |
+| after 3 s idle | 1350 MHz | 301 ms (**+44 ms**) |
+| after 8 s idle | 1350 MHz | 333 ms (**+75 ms**) |
+
+This mirrors the project's own `src/voztrad/gpuwarm.py` note (Windows: P8 @ 210 MHz →
+ASR 44 → ~280 ms). → Keep a **tiny periodic keep-alive inference** running between phrases, or
+pin clocks with `nvidia-smi -lgc`, so the first word of each utterance isn't slow. Port
+`gpuwarm.py` to Linux (it already drives a Silero session on CUDA to hold the clock up).
+
+---
+
 ## Appendix — reproduce
 
 ```bash
