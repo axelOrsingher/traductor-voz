@@ -1,10 +1,11 @@
-"""Grabación guiada de tu voz para clonarla (Pocket TTS).
+"""Guided recording of your voice for cloning (Pocket TTS).
 
-  python -m voztrad voice            # graba castellano + inglés, arma previews y los reproduce
-  python -m voztrad voice use en     # elige la referencia: es | en | mix
+  python -m voztrad voice            # record Spanish + English, build previews and play them
+  python -m voztrad voice use en     # pick the reference: es | en | mix
 
-Guarda en models/voice/ (no se versiona): me_es.wav, me_en.wav, me_mix.wav y
-me.wav (la elegida, la que usa el motor).
+Saves to models/voice/ (not versioned): me_es.wav, me_en.wav, me_mix.wav and
+me.wav (the chosen one, used by the engine). Recording and playback go through the
+platform audio backend (audio.py), so this works wherever the engine does.
 """
 
 from __future__ import annotations
@@ -12,14 +13,11 @@ from __future__ import annotations
 import shutil
 import sys
 import time
-import winsound
-from pathlib import Path
 
 import numpy as np
-import pyaudiowpatch as pyaudio
 import soundfile as sf
 
-from .audio import find_input
+from .audio import CablePlayer, Capture, PyAudio, find_default_output, find_input
 from .config import MODELS, ROOT
 
 VOICE = MODELS / "voice"
@@ -40,22 +38,39 @@ READ_EN = (
 PREVIEW_TEXT = "Hi, this is my voice speaking English through the translator. Does it sound like me?"
 
 
-def _record(pa: pyaudio.PyAudio, dev: dict, seconds: int) -> tuple[np.ndarray, int]:
-    rate, ch = int(dev["defaultSampleRate"]), max(1, int(dev["maxInputChannels"]))
-    s = pa.open(format=pyaudio.paFloat32, channels=ch, rate=rate, input=True,
-                input_device_index=dev["index"], frames_per_buffer=rate // 10)
-    frames = []
-    for i in range(seconds * 10):
-        frames.append(s.read(rate // 10, exception_on_overflow=False))
-        if i % 10 == 0:
-            left = seconds - i // 10
-            lvl = np.abs(np.frombuffer(frames[-1], np.float32)).max()
-            bar = "#" * int(min(1.0, lvl * 3) * 30)
-            print(f"\r  grabando… {left:2d}s  nivel {bar:<30}", end="", flush=True)
-    s.close()
+def _record(pa, dev: dict, seconds: int) -> tuple[np.ndarray, int]:
+    cap = Capture(pa, dev)
+    rate, ch = cap.rate, cap.channels
+    need = seconds * rate * ch  # float32 samples, interleaved
+    chunks, have, next_tick = [], 0, 0
+    cap.start()
+    try:
+        while have < need:
+            _, data = cap.q.get(timeout=5)
+            x = np.frombuffer(data, np.float32)
+            chunks.append(x)
+            have += len(x)
+            if have >= next_tick:  # once per second
+                left = seconds - have // (rate * ch)
+                bar = "#" * int(min(1.0, float(np.abs(x).max()) * 3) * 30)
+                print(f"\r  grabando… {left:2d}s  nivel {bar:<30}", end="", flush=True)
+                next_tick += rate * ch
+    finally:
+        cap.close()
     print("\r" + " " * 60 + "\r", end="")
-    x = np.frombuffer(b"".join(frames), np.float32).reshape(-1, ch).mean(axis=1)
-    return x, rate
+    x = np.concatenate(chunks)[:need]
+    x = x[:len(x) // ch * ch].reshape(-1, ch).mean(axis=1)
+    return x.astype(np.float32), rate
+
+
+def _play(pa, audio: np.ndarray, sr: int):
+    """Play on the default output and block until it has finished."""
+    player = CablePlayer(pa, find_default_output(pa))
+    player.play(audio, sr)
+    while player.queued_s > 0:
+        time.sleep(0.05)
+    time.sleep(0.2)  # device buffer
+    player.close()
 
 
 def _trim_and_check(x: np.ndarray, sr: int) -> tuple[np.ndarray, list[str]]:
@@ -65,7 +80,7 @@ def _trim_and_check(x: np.ndarray, sr: int) -> tuple[np.ndarray, list[str]]:
         warn.append("satura (clipping): alejate un poco del micrófono o bajá la ganancia")
     if peak < 0.05:
         warn.append("muy bajo: acercate al micrófono o subí la ganancia")
-    # recortar silencio de los bordes (bloques de 50 ms bajo 2% del pico)
+    # trim silence at the edges (50 ms blocks under 2% of the peak)
     blk = sr // 20
     e = np.array([np.abs(x[i:i + blk]).max() for i in range(0, len(x), blk)])
     voiced = np.where(e > 0.02 * max(peak, 1e-6) + 0.005)[0]
@@ -78,7 +93,7 @@ def _trim_and_check(x: np.ndarray, sr: int) -> tuple[np.ndarray, list[str]]:
 
 def record(mic: str | None = None):
     VOICE.mkdir(parents=True, exist_ok=True)
-    pa = pyaudio.PyAudio()
+    pa = PyAudio()
     dev = find_input(pa, mic)
     print(f"\nMicrófono: {dev['name']}\n"
           "Buscá un lugar silencioso. Hablá natural, como en una llamada.\n")
@@ -105,12 +120,13 @@ def record(mic: str | None = None):
 
 
 def previews():
-    """Genera y reproduce la misma frase con cada referencia, para elegir."""
+    """Synthesize and play the same sentence with each reference, to pick one."""
     from .tts_pocket import PocketTTS
     out = ROOT / "out"
     out.mkdir(exist_ok=True)
     refs = [k for k in ("en", "es", "mix") if (VOICE / f"me_{k}.wav").exists()]
     print("Generando muestras de tu voz clonada (tarda unos segundos cada una)…")
+    pa = PyAudio()
     for k in refs:
         tts = PocketTTS(VOICE / f"me_{k}.wav")
         t = time.perf_counter()
@@ -118,12 +134,13 @@ def previews():
         path = out / f"voice_preview_{k}.wav"
         sf.write(path, audio, tts.sr)
         print(f"  ▶ referencia '{k}' ({time.perf_counter() - t:.1f} s): {path.name}")
-        winsound.PlaySound(str(path), winsound.SND_FILENAME)
+        _play(pa, audio, tts.sr)
         time.sleep(0.4)
+    pa.terminate()
     best = "en" if "en" in refs else refs[0]
     use(best, quiet=True)
     print(f"\nQuedó elegida '{best}'. Para cambiarla:  python -m voztrad voice use es|en|mix\n"
-          f"Para volver a escucharlas: abrí out\\voice_preview_*.wav")
+          f"Para volver a escucharlas: abrí out/voice_preview_*.wav")
 
 
 def use(key: str, quiet: bool = False):

@@ -119,10 +119,10 @@ GPU warm-up, `QT_QPA_PLATFORM=xcb`, etc.).
 - Porting notes and measurements go in `docs/porting/<platform>-*.md`.
 
 ## Known gaps (2026-10-13)
-- `hwdetect.choose_profile()` returns `smart_turn: False` for every profile, which drops
-  Smart Turn on Windows too (~250 ms regression); `--no-auto` also disables refine and
-  Smart Turn. Being fixed.
-- Refiner wiring (`refine.py`) is Windows-only (`.exe` path, Job object).
-- `voice.py`, `scripts/e2e.py` and `e2e_listen.py` still use PyAudioWPatch (Windows only).
+- `scripts/e2e.py` and `e2e_listen.py` still use PyAudioWPatch (Windows only); there is no
+  backend-agnostic end-to-end harness yet.
+- The refiner's child-process guard on Linux (`PR_SET_PDEATHSIG`) and macOS (watchdog) is
+  written but not yet verified on those systems; `fetch_models.py` only installs llama.cpp
+  on Windows (elsewhere: `llama-server` on PATH or `VOZTRAD_LLAMA_SERVER`).
 - macOS: not supported yet (port in progress on branch `macos-port`).
 - No CI yet.

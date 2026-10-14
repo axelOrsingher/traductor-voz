@@ -1,19 +1,23 @@
-"""Traducción "buena" con TranslateGemma-4B (llama.cpp, GPU) para refinar la rápida (opus-mt).
+"""High-quality translation with TranslateGemma-4B (llama.cpp) that refines the fast one (opus-mt).
 
-Investigación medida en esta máquina (2026-10-05): ningún traductor rápido mejora a opus-mt;
-TranslateGemma es el único que arregla modismos ("está bárbaro" -> "it's great", "infra" ->
-"infrastructure team", "lo vemos" -> "let's discuss it") pero tarda ~250-400 ms por frase.
-Por eso va en un SEGUNDO nivel: el subtítulo sale al instante con opus-mt y se reemplaza; la
-voz usa la versión buena solo si hay tiempo (ver Engine._tts_loop).
+Measured on the Windows dev box (2026-10-05): no fast translator beats opus-mt; TranslateGemma
+is the only one that fixes idioms ("está bárbaro" -> "it's great", "infra" -> "infrastructure
+team", "lo vemos" -> "let's discuss it"), but it takes ~250-400 ms per phrase. So it is a
+SECOND tier: the subtitle shows opus-mt instantly and is then replaced; your voice uses the good
+version only if there is time (see Engine._tts_loop).
 
-llama-server corre como proceso hijo dentro de un Job de Windows con KILL_ON_JOB_CLOSE: si el
-motor muere, el servidor (y sus 2,5 GB de VRAM) muere con él.
+llama-server runs as a child process that must die with the engine, even on a crash (it holds
+~2.5 GB of VRAM): a Windows Job with KILL_ON_JOB_CLOSE, PR_SET_PDEATHSIG on Linux, and a small
+watchdog process elsewhere (macOS).
 """
 
 from __future__ import annotations
 
 import ctypes
 import json
+import os
+import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -24,14 +28,28 @@ from pathlib import Path
 
 from .config import MODELS, ROOT
 
+# Pinned Windows build installed by scripts/fetch_models.py.
 LLAMA_DIR = Path.home() / "tools" / "llama.cpp-b11433-cuda12.4"
 MODEL = MODELS / "translategemma-4b-it.Q4_K_M.gguf"
 NAMES = {"es": "Spanish", "en": "English"}
 CODES = {"es": "es-AR", "en": "en"}
 
 
+def find_server() -> Path | None:
+    """llama-server binary: $VOZTRAD_LLAMA_SERVER, then the pinned Windows build, then PATH
+    (e.g. `brew install llama.cpp` on macOS, a distro or self-built package on Linux)."""
+    env = os.environ.get("VOZTRAD_LLAMA_SERVER")
+    if env:
+        return Path(env) if Path(env).exists() else None
+    pinned = LLAMA_DIR / ("llama-server.exe" if sys.platform == "win32" else "llama-server")
+    if pinned.exists():
+        return pinned
+    found = shutil.which("llama-server")
+    return Path(found) if found else None
+
+
 def prompt(text: str, src: str, tgt: str) -> str:
-    """Formato oficial de TranslateGemma (leído del template del GGUF)."""
+    """Official TranslateGemma format (read from the GGUF chat template)."""
     s, t = NAMES[src], NAMES[tgt]
     u = (f"You are a professional {s} ({CODES[src]}) to {t} ({CODES[tgt]}) translator. Your goal is to "
          f"accurately convey the meaning and nuances of the original {s} text while adhering to {t} "
@@ -41,10 +59,36 @@ def prompt(text: str, src: str, tgt: str) -> str:
     return f"<start_of_turn>user\n{u}<end_of_turn>\n<start_of_turn>model\n"
 
 
-def _kill_with_parent(proc: subprocess.Popen):
-    """Mete al proceso en un Job que se cierra (y lo mata) cuando muere este proceso."""
-    if sys.platform != "win32":
-        return None
+def _die_with_parent_linux():
+    """preexec_fn: the kernel sends SIGTERM to the child when the parent dies."""
+    ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+
+
+# Watchdog for platforms without a kernel mechanism (macOS): polls the parent and kills the child.
+_WATCHDOG = """
+import os, signal, sys, time
+parent, child = int(sys.argv[1]), int(sys.argv[2])
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+while alive(child):
+    if os.getppid() != parent or not alive(parent):
+        try:
+            os.kill(child, signal.SIGTERM); time.sleep(2); os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        break
+    time.sleep(0.5)
+"""
+
+
+def _windows_job(proc: subprocess.Popen):
+    """Put the process in a Job that is closed (killing it) when this process dies."""
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.CreateJobObjectW.restype = ctypes.c_void_p
     job = k32.CreateJobObjectW(None, None)
@@ -61,36 +105,50 @@ def _kill_with_parent(proc: subprocess.Popen):
     info = _Ext()
     info.basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     k32.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-    k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))  # Extended limit info
+    k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))  # extended limit info
     k32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     k32.AssignProcessToJobObject(job, int(proc._handle))
-    return job  # el handle queda abierto mientras viva el motor
+    return job  # the handle stays open while the engine lives
+
+
+def _guard_child(proc: subprocess.Popen):
+    """Make sure the child dies with this process. Returns a handle to keep alive."""
+    if sys.platform == "win32":
+        return _windows_job(proc)
+    if sys.platform.startswith("linux"):
+        return None  # PR_SET_PDEATHSIG was set in preexec_fn
+    return subprocess.Popen([sys.executable, "-c", _WATCHDOG, str(os.getpid()), str(proc.pid)],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class Refiner:
     def __init__(self, port: int = 8781, model: Path = MODEL):
-        exe = LLAMA_DIR / "llama-server.exe"
-        if not exe.exists() or not model.exists():
-            raise FileNotFoundError(f"falta {exe if not exe.exists() else model}")
+        exe = find_server()
+        if exe is None:
+            raise FileNotFoundError("llama-server not found (scripts/fetch_models.py, PATH, "
+                                    "or VOZTRAD_LLAMA_SERVER)")
+        if not model.exists():
+            raise FileNotFoundError(f"missing {model}")
         self.url = f"http://127.0.0.1:{port}"
         log = open(ROOT / "logs" / "llama-server.txt", "w", encoding="utf-8")
         self.proc = subprocess.Popen(
             [str(exe), "-m", str(model), "-ngl", "99", "-c", "1024", "-np", "1", "-fa", "on",
              "--threads", "2", "--no-webui", "--no-jinja", "--port", str(port), "--host", "127.0.0.1"],
-            cwd=LLAMA_DIR, stdout=log, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
-        self._job = _kill_with_parent(self.proc)
+            cwd=exe.parent, stdout=log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            preexec_fn=_die_with_parent_linux if sys.platform.startswith("linux") else None)
+        self._guard = _guard_child(self.proc)
         self._lock = threading.Lock()
-        self.ema_ms = 350.0  # latencia típica estimada; se actualiza con cada pedido
+        self.ema_ms = 350.0  # typical latency estimate; updated on every request
         self._wait_ready(90)
-        for src, tgt in (("es", "en"), ("en", "es")):  # warm-up: cachea el prefijo del prompt
+        for src, tgt in (("es", "en"), ("en", "es")):  # warm-up: caches the prompt prefix
             self.translate("Hola, ¿cómo estás?" if src == "es" else "Hi, how are you?", src, tgt)
 
     def _wait_ready(self, timeout: float):
         end = time.time() + timeout
         while time.time() < end:
             if self.proc.poll() is not None:
-                raise RuntimeError("llama-server terminó al arrancar (ver logs/llama-server.txt)")
+                raise RuntimeError("llama-server exited during startup (see logs/llama-server.txt)")
             try:
                 with urllib.request.urlopen(self.url + "/health", timeout=1) as r:
                     if r.status == 200:
@@ -98,10 +156,10 @@ class Refiner:
             except (urllib.error.URLError, OSError):
                 pass
             time.sleep(0.3)
-        raise RuntimeError("llama-server no respondió")
+        raise RuntimeError("llama-server did not respond")
 
     def translate(self, text: str, src: str, tgt: str, timeout: float = 5.0) -> str | None:
-        """Traducción buena, o None si no llegó a tiempo / falló (se usa la rápida)."""
+        """Good translation, or None if it was late / failed (the fast one is used)."""
         body = json.dumps({"prompt": prompt(text, src, tgt), "temperature": 0, "cache_prompt": True,
                            "n_predict": min(200, 3 * len(text.split()) + 24),
                            "stop": ["<end_of_turn>"]}).encode()

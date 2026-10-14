@@ -124,8 +124,12 @@ class Engine:
 
         self.smart_turn = None
         if cfg.smart_turn:
-            from .smartturn import SmartTurn
-            self.smart_turn = SmartTurn()
+            try:
+                from .smartturn import SmartTurn
+                self.smart_turn = SmartTurn()
+            except Exception as e:  # noqa: BLE001 — missing model: fall back to the plain hangover
+                self._emit({"type": "status", "msg": f"Smart Turn unavailable ({e}); "
+                            "phrases close on the silence hangover (run scripts/fetch_models.py)"})
         self._partials: dict[str, np.ndarray] = {}
         self._partial_lock = threading.Lock()
         self.asr_q = DualQueue(cfg.a_queue_max)
@@ -502,6 +506,8 @@ class Engine:
 def format_event(ev: dict) -> str:
     if ev["type"] == "listen":
         return f"  🔊 ES (#{ev['seq']}): tts {ev['tts_ms']:.0f} | total {ev['total_ms']:.0f} ms"
+    if ev["type"] == "refine":
+        return f"  ✎ {ev['dir']} #{ev['seq']} ({ev['ms']:.0f} ms): {ev['tgt']}"
     if ev["type"] != "phrase":
         return f"[{ev['type']}] {ev.get('msg', '')}"
     l = ev["lat"]
