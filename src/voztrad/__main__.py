@@ -38,6 +38,7 @@ def cmd_run(a):
         prof = choose_profile(detect())
         for n in prof.get("notes", []):
             print(f"[auto] {n}", flush=True)
+    base = Config()  # --no-auto (empty profile) falls back to these defaults
     pq = a.parakeet_quant
     if pq == "auto":
         pq = prof.get("parakeet_quant")
@@ -48,11 +49,11 @@ def cmd_run(a):
                  cable=a.cable, normalize_voseo=not a.no_norm, parakeet_quant=pq,
                  mt_compute_type=a.mt_compute_type or prof.get("mt_compute_type"),
                  enable_a=not a.no_a, enable_b=not a.no_b, port=a.port,
-                 gpu_warm=prof.get("gpu_warm", True) and not a.no_gpu_warm,
+                 gpu_warm=prof.get("gpu_warm", base.gpu_warm) and not a.no_gpu_warm,
                  tts=a.tts or prof.get("tts", "piper"),
                  voice_ref=Path(a.voice) if a.voice else None, listen=not a.no_listen,
-                 refine=prof.get("refine", False) and not a.no_refine,
-                 smart_turn=prof.get("smart_turn", False) and not a.no_smart_turn)
+                 refine=prof.get("refine", base.refine) and not a.no_refine,
+                 smart_turn=prof.get("smart_turn", base.smart_turn) and not a.no_smart_turn)
     if a.listen_voice:
         cfg.listen_voice = Path(a.listen_voice)
     cfg.seg.hangover_ms = a.hangover
@@ -303,7 +304,7 @@ def _run_args(r):
     r.add_argument("--no-refine", action="store_true",
                    help="sin TranslateGemma (solo traducción rápida; libera ~2,6 GB de VRAM)")
     r.add_argument("--no-listen", action="store_true", help="no reproducir la traducción al castellano")
-    r.add_argument("--no-smart-turn", action="store_true", help="sin Smart Turn (no descarga el modelo de fin de turno)")
+    r.add_argument("--no-smart-turn", action="store_true", help="disable Smart Turn end-of-turn detection")
     r.add_argument("--listen-voice", default=None, help="voz Piper para el castellano (default es_MX-ald-medium)")
 
 

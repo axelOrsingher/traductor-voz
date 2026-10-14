@@ -36,7 +36,8 @@ def _nvidia() -> dict | None:
 
 def _ram_gb() -> float:
     try:
-        return round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
+        import psutil  # os.sysconf doesn't exist on Windows
+        return round(psutil.virtual_memory().total / 1e9, 1)
     except Exception:
         return 0.0
 
@@ -52,6 +53,12 @@ def _audio_server() -> str:
     return "unknown"
 
 
+def _llama_server() -> str | None:
+    from .refine import find_server
+    exe = find_server()
+    return str(exe) if exe else None
+
+
 def detect() -> dict:
     gpu = _nvidia()
     return {
@@ -62,19 +69,24 @@ def detect() -> dict:
         "ram_gb": _ram_gb(),
         "audio_server": _audio_server(),
         "has_voice_ref": any(p.exists() for p in VOICE_REFS),
+        "llama_server": _llama_server(),
     }
 
 
 def choose_profile(hw: dict) -> dict:
-    """Return Config-shaped overrides + human-readable notes."""
+    """Return Config-shaped overrides + human-readable notes.
+
+    Smart Turn (ONNX, CPU, ~46 ms per decision) is on in every profile: it closes a
+    phrase after ~200 ms of silence instead of the 500 ms hangover (~250 ms less
+    end-to-end, measured on Windows)."""
     notes: list[str] = []
     linux = hw["platform"] != "win32"
     tts = "pocket" if hw["has_voice_ref"] else "piper"
 
     if not hw["has_cuda"]:
-        notes.append("sin GPU NVIDIA: todo en CPU (ASR lento, ~300 ms+). Mejor con GPU.")
+        notes.append("no NVIDIA GPU: everything on CPU (slow ASR, ~300 ms+). A GPU is recommended.")
         return {"asr": "parakeet", "parakeet_quant": "int8", "mt_compute_type": "int8",
-                "refine": False, "smart_turn": False, "gpu_warm": False, "tts": tts,
+                "refine": False, "smart_turn": True, "gpu_warm": False, "tts": tts,
                 "notes": notes}
 
     g = hw["gpu"]
@@ -82,25 +94,27 @@ def choose_profile(hw: dict) -> dict:
     ampere = cc >= 8.0
     mt_ct = "float16" if ampere else "int8"
     notes.append(f"GPU {g['name']} ({vram} MiB, cc {cc}) -> MT {mt_ct}"
-                 + ("" if ampere else " (int8 es más rápido que float16 en Turing)"))
-    # the TranslateGemma refiner (llama.cpp) is only wired on Windows for now
-    can_refine = (not linux) and vram >= 6000
+                 + ("" if ampere else " (int8 is faster than float16 on Turing)"))
+    can_refine = vram >= 6000 and hw.get("llama_server") is not None
 
     if vram >= 8000:
         quant = None  # fp32
         refine = can_refine
-        notes.append("≥8 GB: Parakeet fp32" + (" + refinador" if refine else ""))
+        notes.append(">=8 GB: Parakeet fp32" + (" + refiner" if refine else ""))
     elif vram >= 6000:
         quant = "fp16"
         refine = can_refine
-        notes.append("6-8 GB: Parakeet fp16" + (" + refinador" if refine else ""))
+        notes.append("6-8 GB: Parakeet fp16" + (" + refiner" if refine else ""))
     else:
         quant = None  # fp32 ~3.5 GB fits alone and is the fastest on this card
         refine = False
-        notes.append(f"<6 GB: Parakeet fp32 solo, sin refinador (no entra en {vram} MiB)")
+        notes.append(f"<6 GB: Parakeet fp32 alone, no refiner (doesn't fit in {vram} MiB)")
         if linux:
-            notes.append("fp16 ahorraría VRAM pero es ~3x más lento acá (ver recon §6)")
+            notes.append("fp16 would save VRAM but is ~3x slower here (see recon §6)")
+    if vram >= 6000 and not can_refine:
+        notes.append("refiner off: llama-server not found (scripts/fetch_models.py, or set "
+                     "VOZTRAD_LLAMA_SERVER)")
 
     return {"asr": "parakeet", "parakeet_quant": quant, "mt_compute_type": mt_ct,
-            "refine": refine, "smart_turn": False, "gpu_warm": True, "tts": tts,
+            "refine": refine, "smart_turn": True, "gpu_warm": True, "tts": tts,
             "notes": notes}
